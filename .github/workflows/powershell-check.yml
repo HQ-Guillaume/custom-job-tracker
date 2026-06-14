@@ -26,3 +26,7 @@ jobs:
               Write-Host "OK $($file.Name)"
             }
           }
+
+      - name: Run no-Excel scoring tests
+        shell: pwsh
+        run: ./Test-ScoringRules.ps1

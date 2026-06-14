@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [int]$DaysBack = 7,
     [string]$Location = "France",
@@ -10,7 +10,8 @@ param(
     [int]$MaxBackups = 5,
     [switch]$SkipLinkedIn,
     [switch]$SkipWttj,
-    [switch]$DisableWttjPublicFallback
+    [switch]$DisableWttjPublicFallback,
+    [switch]$SelfTest
 )
 
 Set-StrictMode -Version 2.0
@@ -37,6 +38,7 @@ if ([IO.Path]::GetExtension($TrackerPath).ToLowerInvariant() -ne ".xlsx") {
 $SeenResultKeys = @{}
 $LinkedInDelayMilliseconds = 1200
 $MinimumMatchScore = 35
+$JobCrawlerPreferences = $null
 
 $WttjUrlCandidatePattern = "(?i)(web[-_\s]*analyst|digital[-_\s]*analyst|web[-_\s]*analytics|digital[-_\s]*analytics|analytics[-_\s]*(consultant|specialist|manager|engineer)|tracking|taggage|tagging|data[-_\s]*analyst|(^|[-_\s])ga4($|[-_\s])|(^|[-_\s])gtm($|[-_\s])|google[-_\s]*(analytics|tag[-_\s]*manager)|piano|contentsquare|content[-_\s]*square|(^|[-_\s])cro($|[-_\s]))"
 
@@ -52,11 +54,51 @@ $LinkedInQueries = @(
     "tracking analytics specialist",
     "analytics consultant google tag manager",
     "performance digital google analytics",
-    "chargé performance digital google analytics",
+    "charge performance digital google analytics",
     "piano analytics",
     "contentsquare analytics",
     "tagging plan analytics"
 )
+
+function Repair-DisplayText {
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return ""
+    }
+
+    $clean = [string]$Text
+    $clean = $clean.Replace(([string][char]0x00A0), " ")
+    $clean = $clean.Replace(([string][char]0x2018), "'")
+    $clean = $clean.Replace(([string][char]0x2019), "'")
+    $clean = $clean.Replace(([string][char]0x201C), '"')
+    $clean = $clean.Replace(([string][char]0x201D), '"')
+    $clean = $clean.Replace(([string][char]0x2013), "-")
+    $clean = $clean.Replace(([string][char]0x2014), "-")
+
+    $mojibakeReplacements = @(
+        @{ From = ([string][char]0x00C3 + [string][char]0x00A9); To = "e" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00A8); To = "e" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00AA); To = "e" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00AB); To = "e" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00A0); To = "a" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00A2); To = "a" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00B4); To = "o" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00B9); To = "u" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00BB); To = "u" },
+        @{ From = ([string][char]0x00C3 + [string][char]0x00A7); To = "c" },
+        @{ From = ([string][char]0x251C + [string][char]0x00A1); To = "a" },
+        @{ From = ([string][char]0x251C + [string][char]0x00A9); To = "e" },
+        @{ From = ([string][char]0x00E2 + [string][char]0x0080 + [string][char]0x0099); To = "'" },
+        @{ From = ([string][char]0x00E2 + [string][char]0x0080 + [string][char]0x0093); To = "-" }
+    )
+
+    foreach ($replacement in $mojibakeReplacements) {
+        $clean = $clean.Replace([string]$replacement.From, [string]$replacement.To)
+    }
+
+    return ([regex]::Replace($clean, "\s+", " ")).Trim()
+}
 
 function Set-RunWindowTitle {
     param([string]$Title)
@@ -123,7 +165,7 @@ function ConvertFrom-HtmlText {
     $text = [regex]::Replace($text, "(?is)<br\s*/?>|</p>|</li>|</div>|</h\d>", " ")
     $text = [regex]::Replace($text, "(?is)<[^>]+>", " ")
     $text = [System.Net.WebUtility]::HtmlDecode($text)
-    return ([regex]::Replace($text, "\s+", " ")).Trim()
+    return Repair-DisplayText $text
 }
 
 function ConvertFrom-HtmlAttribute {
@@ -133,7 +175,7 @@ function ConvertFrom-HtmlAttribute {
         return ""
     }
 
-    return ([System.Net.WebUtility]::HtmlDecode($Value)).Trim()
+    return Repair-DisplayText ([System.Net.WebUtility]::HtmlDecode($Value))
 }
 
 function ConvertTo-MatchText {
@@ -356,7 +398,7 @@ function Get-ContractTypeFromText {
         return ""
     }
 
-    if ($Text -match "(?i)(\bCDI\b|contrat\s+(a|à)\s+dur[eé]e\s+ind[eé]termin[eé]e)") {
+    if ($Text -match "(?i)(\bCDI\b|contrat\s+a\s+duree\s+indeterminee)") {
         return "CDI"
     }
     if ($Text -match "(?i)(alternance|alternant|apprentissage|apprenticeship)") {
@@ -365,13 +407,13 @@ function Get-ContractTypeFromText {
     if ($Text -match "(?i)(stage|stagiaire|internship|intern\b)") {
         return "Internship"
     }
-    if ($Text -match "(?i)(\bCDD\b|contrat\s+(a|à)\s+dur[eé]e\s+d[eé]termin[eé]e|fixed[-\s]*term|temporary|temporaire)") {
+    if ($Text -match "(?i)(\bCDD\b|contrat\s+a\s+duree\s+determinee|fixed[-\s]*term|temporary|temporaire)") {
         return "CDD"
     }
-    if ($Text -match "(?i)(freelance|contractor|ind[eé]pendant)") {
+    if ($Text -match "(?i)(freelance|contractor|independant)") {
         return "Freelance"
     }
-    if ($Text -match "(?i)(Employment\s+type\s+Full-time|Type\s+d[’']emploi\s+Temps\s+plein|\bFull-time\b|\bTemps\s+plein\b)") {
+    if ($Text -match "(?i)(Employment\s+type\s+Full-time|Type\s+d.?emploi\s+Temps\s+plein|\bFull-time\b|\bTemps\s+plein\b)") {
         return "Full-time"
     }
     if ($Text -match "(?i)(permanent\s+(contract|position|role)|\bpermanent\b)") {
@@ -690,7 +732,170 @@ function Test-IsExcludedContractType {
     return $contractText -match "\bcdd\b|apprenticeship|apprentissage|alternance|internship|\bstage\b|stagiaire|temporary|fixed\s+term"
 }
 
-function Test-IsAgencyConsultingEsnSignal {
+function Get-PreferenceObjectValue {
+    param(
+        [AllowNull()]$Object,
+        [string]$Name,
+        [AllowNull()]$DefaultValue = $null
+    )
+
+    if ($null -eq $Object) {
+        return $DefaultValue
+    }
+
+    if ($Object -is [Collections.IDictionary] -and $Object.Contains($Name)) {
+        return $Object[$Name]
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -ne $property -and $null -ne $property.Value) {
+        return $property.Value
+    }
+
+    return $DefaultValue
+}
+
+function New-DefaultJobCrawlerPreferences {
+    return [PSCustomObject]@{
+        preferred_employer_type = "annonceur"
+        employer_type_weights = [PSCustomObject]@{
+            annonceur = 10
+            agency = -8
+            consulting = -8
+            esn = -10
+            unknown = 0
+        }
+        location_fit_weights = [PSCustomObject]@{
+            target = 8
+            france_other = -4
+            foreign = -20
+            unknown = 0
+        }
+        seniority_fit_weights = [PSCustomObject]@{
+            target = 0
+            senior_ok = 0
+            too_junior = -12
+            too_managerial = -12
+            unknown = 0
+        }
+        contract_fit_weights = [PSCustomObject]@{
+            preferred = 5
+            freelance = -4
+            excluded = -100
+            unknown = 0
+        }
+        target_location_patterns = @(
+            "paris",
+            "ile\s*de\s*france",
+            "la\s+defense",
+            "puteaux",
+            "boulogne",
+            "courbevoie",
+            "nanterre",
+            "clichy",
+            "remote",
+            "teletravail",
+            "france"
+        )
+        foreign_location_patterns = @(
+            "london",
+            "madrid",
+            "barcelona",
+            "casablanca",
+            "montreal",
+            "brussels",
+            "belgium",
+            "luxembourg",
+            "switzerland",
+            "cyprus",
+            "canada",
+            "morocco",
+            "spain",
+            "united\s+kingdom"
+        )
+    }
+}
+
+function Get-JobCrawlerPreferences {
+    $default = New-DefaultJobCrawlerPreferences
+    $path = Join-Path $PSScriptRoot "config\preferences.json"
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $default
+    }
+
+    try {
+        return (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json)
+    }
+    catch {
+        Write-Warning ("Could not read config\preferences.json, using built-in defaults: {0}" -f $_.Exception.Message)
+        return $default
+    }
+}
+
+function Get-PreferenceWeight {
+    param(
+        [AllowNull()]$Preferences,
+        [string]$GroupName,
+        [string]$Key,
+        [int]$DefaultValue = 0
+    )
+
+    $group = Get-PreferenceObjectValue -Object $Preferences -Name $GroupName -DefaultValue $null
+    $rawValue = Get-PreferenceObjectValue -Object $group -Name $Key -DefaultValue $DefaultValue
+    $number = 0
+    if ([int]::TryParse([string]$rawValue, [ref]$number)) {
+        return $number
+    }
+
+    return $DefaultValue
+}
+
+function Get-PreferenceArray {
+    param(
+        [AllowNull()]$Preferences,
+        [string]$Name,
+        [string[]]$DefaultValue = @()
+    )
+
+    $rawValue = Get-PreferenceObjectValue -Object $Preferences -Name $Name -DefaultValue $DefaultValue
+    if ($null -eq $rawValue) {
+        return @()
+    }
+    if ($rawValue -is [string]) {
+        return @([string]$rawValue)
+    }
+
+    return @($rawValue)
+}
+
+function Test-AnyPatternMatch {
+    param(
+        [string]$Text,
+        [object[]]$Patterns
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $false
+    }
+
+    foreach ($pattern in @($Patterns)) {
+        if ([string]::IsNullOrWhiteSpace([string]$pattern)) {
+            continue
+        }
+
+        try {
+            if ($Text -match [string]$pattern) {
+                return $true
+            }
+        }
+        catch {
+        }
+    }
+
+    return $false
+}
+
+function Get-EmployerType {
     param(
         [AllowNull()][string]$Title,
         [AllowNull()][string]$CompanyName,
@@ -700,20 +905,164 @@ function Test-IsAgencyConsultingEsnSignal {
     $titleText = ConvertTo-MatchText $Title
     $companyText = ConvertTo-MatchText $CompanyName
     $combinedText = ConvertTo-MatchText (Join-CleanTextParts @($Title, $CompanyName, $Text))
-    $knownServiceCompanyPattern = "fifty\s*five|\b55\b|converteo|artefact|optimal\s+ways|innoha|nexton|scalian|amaris|cgi|infotel|oventi|keyrus|micropole|business\s+&?\s+decision|devoteam|onepoint|talan|wavestone|mc2i|sopra\s+steria|capgemini|accenture|deloitte|pwc|ey|kpmg|publicis|dentsu|havas|labelium|pixalione|eskimoz|allmatik|leonar|consort|niji|sql[iy]|jellyfish|ekinox"
-    $serviceContextPattern = "\bagence\b|agency|cabinet\s+(de\s+)?conseil|soci[eé]t[eé]\s+de\s+conseil|\bconseil\b|consulting\s+(firm|agency|company|cabinet)|\besn\b|\bssii\b|services\s+num[eé]riques|chez\s+nos\s+clients|missions?\s+chez\s+les?\s+clients"
 
-    if (-not [string]::IsNullOrWhiteSpace($companyText) -and $companyText -match $knownServiceCompanyPattern) {
-        return $true
-    }
-    if ($combinedText -match $serviceContextPattern) {
-        return $true
-    }
-    if ($titleText -match "\bconsultant(e)?\b|consultant\s+web|consultant\s+digital|consultant\s+analytics|consultant\s+tracking") {
-        return $true
+    if ([string]::IsNullOrWhiteSpace($companyText) -or $companyText -match "confidential|jobgether|linkedin|indeed|talent\s*com|jobs?\s+via") {
+        return "unknown"
     }
 
-    return $false
+    $knownAgencyPattern = "publicis|dentsu|havas|labelium|pixalione|eskimoz|jellyfish|performics|iprospect|allmatik|leonar|ekinox"
+    $knownConsultingPattern = "fifty\s*[- ]?\s*five|\b55\b|converteo|artefact|optimal\s+ways|innoha|ekimetrics|wavestone|mc2i|deloitte|pwc|ey|kpmg|accenture"
+    $knownEsnPattern = "\bcgi\b|infotel|oventi|keyrus|micropole|business\s+&?\s+decision|devoteam|onepoint|talan|sopra\s+steria|capgemini|\bsqli\b|\bsqly\b|niji|consort|nexton|scalian|amaris|\bsii\b|atos|worldline|inetum|alten|ausy|neosoft"
+    $agencyContextPattern = "\bagence\b|agency|paid\s+media\s+agency|marketing\s+agency|media\s+agency"
+    $consultingContextPattern = "cabinet\s+(de\s+)?conseil|societe\s+de\s+conseil|\bconseil\b|consulting\s+(firm|agency|company|cabinet)|missions?\s+chez\s+les?\s+clients|chez\s+nos\s+clients"
+    $esnContextPattern = "\besn\b|\bssii\b|services\s+numeriques|entreprise\s+de\s+services\s+du\s+numerique"
+
+    if ($companyText -match $knownEsnPattern -or $combinedText -match $esnContextPattern) {
+        return "esn"
+    }
+    if ($companyText -match $knownAgencyPattern -or $combinedText -match $agencyContextPattern) {
+        return "agency"
+    }
+    if ($companyText -match $knownConsultingPattern -or $combinedText -match $consultingContextPattern) {
+        return "consulting"
+    }
+    if ($titleText -match "\bconsultant(e)?\b" -and $combinedText -match "client|mission|conseil|consulting|cabinet") {
+        return "consulting"
+    }
+
+    return "annonceur"
+}
+
+function Get-LocationFitCategory {
+    param(
+        [AllowNull()][string]$Location,
+        [AllowNull()]$Preferences
+    )
+
+    $locationText = ConvertTo-MatchText $Location
+    if ([string]::IsNullOrWhiteSpace($locationText)) {
+        return "unknown"
+    }
+
+    $targetPatterns = Get-PreferenceArray -Preferences $Preferences -Name "target_location_patterns" -DefaultValue @("paris", "ile\s*de\s*france", "france", "remote", "teletravail")
+    $foreignPatterns = Get-PreferenceArray -Preferences $Preferences -Name "foreign_location_patterns" -DefaultValue @("london", "madrid", "casablanca", "montreal", "belgium", "spain", "canada", "morocco")
+
+    if (Test-AnyPatternMatch -Text $locationText -Patterns $targetPatterns) {
+        return "target"
+    }
+    if (Test-AnyPatternMatch -Text $locationText -Patterns $foreignPatterns) {
+        return "foreign"
+    }
+    if ($locationText -match "\bfrance\b|paris|ile\s*de\s*france") {
+        return "target"
+    }
+
+    return "france_other"
+}
+
+function Get-SeniorityFitCategory {
+    param(
+        [AllowNull()][string]$Title,
+        [AllowNull()][string]$Text
+    )
+
+    $titleText = ConvertTo-MatchText $Title
+    $fullText = ConvertTo-MatchText (Join-CleanTextParts @($Title, $Text))
+
+    if ($titleText -match "\b(stage|stagiaire|intern|internship|apprentice|apprentissage|alternance|assistant|graduate|junior)\b") {
+        return "too_junior"
+    }
+    if ($titleText -match "\b(head|director|directeur|directrice|lead|manager|responsable|principal)\b") {
+        return "too_managerial"
+    }
+    if ($fullText -match "\b(stage|stagiaire|internship|apprentissage|alternance)\b") {
+        return "too_junior"
+    }
+    if ($titleText -match "\b(senior|sr)\b") {
+        return "senior_ok"
+    }
+
+    return "target"
+}
+
+function Get-ContractFitCategory {
+    param([AllowNull()][string]$ContractType)
+
+    $contractText = ConvertTo-MatchText $ContractType
+    if ([string]::IsNullOrWhiteSpace($contractText)) {
+        return "unknown"
+    }
+    if (Test-IsExcludedContractType $ContractType) {
+        return "excluded"
+    }
+    if ($contractText -match "\bcdi\b|permanent|full\s*time|temps\s+plein") {
+        return "preferred"
+    }
+    if ($contractText -match "freelance|contractor|independant") {
+        return "freelance"
+    }
+
+    return "unknown"
+}
+
+function Get-JobFitDimensions {
+    param(
+        [int]$RoleScore,
+        [AllowNull()][string]$Title,
+        [AllowNull()][string]$CompanyName,
+        [AllowNull()][string]$JobLocation,
+        [AllowNull()][string]$ContractType,
+        [AllowNull()][string]$Text = "",
+        [AllowNull()]$Preferences = $JobCrawlerPreferences
+    )
+
+    if ($null -eq $Preferences) {
+        $Preferences = New-DefaultJobCrawlerPreferences
+    }
+
+    $employerType = Get-EmployerType -Title $Title -CompanyName $CompanyName -Text $Text
+    $locationCategory = Get-LocationFitCategory -Location $JobLocation -Preferences $Preferences
+    $seniorityCategory = Get-SeniorityFitCategory -Title $Title -Text $Text
+    $contractCategory = Get-ContractFitCategory $ContractType
+
+    $employerFit = Get-PreferenceWeight -Preferences $Preferences -GroupName "employer_type_weights" -Key $employerType -DefaultValue 0
+    $locationFit = Get-PreferenceWeight -Preferences $Preferences -GroupName "location_fit_weights" -Key $locationCategory -DefaultValue 0
+    $seniorityFit = Get-PreferenceWeight -Preferences $Preferences -GroupName "seniority_fit_weights" -Key $seniorityCategory -DefaultValue 0
+    $contractFit = Get-PreferenceWeight -Preferences $Preferences -GroupName "contract_fit_weights" -Key $contractCategory -DefaultValue 0
+
+    $notes = New-Object System.Collections.Generic.List[string]
+    $notes.Add(("role score {0}" -f $RoleScore)) | Out-Null
+    if ($employerFit -ne 0) { $notes.Add(("employer {0}: {1}" -f $employerType, $employerFit)) | Out-Null }
+    if ($locationFit -ne 0) { $notes.Add(("location {0}: {1}" -f $locationCategory, $locationFit)) | Out-Null }
+    if ($seniorityFit -ne 0) { $notes.Add(("seniority {0}: {1}" -f $seniorityCategory, $seniorityFit)) | Out-Null }
+    if ($contractFit -ne 0) { $notes.Add(("contract {0}: {1}" -f $contractCategory, $contractFit)) | Out-Null }
+
+    $finalScore = [Math]::Max(0, $RoleScore + $employerFit + $locationFit + $seniorityFit + $contractFit)
+    return [PSCustomObject]@{
+        EmployerType      = $employerType
+        RoleScore         = $RoleScore
+        EmployerFit       = $employerFit
+        LocationFit       = $locationFit
+        SeniorityFit      = $seniorityFit
+        ContractFit       = $contractFit
+        LocationCategory  = $locationCategory
+        SeniorityCategory = $seniorityCategory
+        ContractCategory  = $contractCategory
+        FinalScore        = [int]$finalScore
+        MatchLevel        = Get-MatchLevelFromScore $finalScore
+        Notes             = (($notes.ToArray() | Select-Object -Unique) -join "; ")
+    }
+}
+
+function Test-IsAgencyConsultingEsnSignal {
+    param(
+        [AllowNull()][string]$Title,
+        [AllowNull()][string]$CompanyName,
+        [AllowNull()][string]$Text = ""
+    )
+
+    $employerType = Get-EmployerType -Title $Title -CompanyName $CompanyName -Text $Text
+    return $employerType -in @("agency", "consulting", "esn")
 }
 
 function Test-IsAppliedStatus {
@@ -734,7 +1083,8 @@ function New-JobResult {
         [string]$MatchedKeywords,
         [string]$Url,
         [string]$Platform,
-        [DateTimeOffset]$PublishedAt
+        [DateTimeOffset]$PublishedAt,
+        [AllowNull()][string]$SourceText = ""
     )
 
     if ([string]::IsNullOrWhiteSpace($Title) -or [string]::IsNullOrWhiteSpace($Url)) {
@@ -748,12 +1098,24 @@ function New-JobResult {
 
     $identityKey = Get-JobIdentityKeyFromValues -Title $Title -CompanyName $CompanyName -JobLocation $JobLocation -Url $Url
     $jobId = Get-StableJobId $identityKey
-    $adjustedScore = $MatchScore
+    $fit = Get-JobFitDimensions -RoleScore $MatchScore -Title $Title -CompanyName $CompanyName -JobLocation $JobLocation -ContractType $ContractType -Text $SourceText
+    $adjustedScore = [int]$fit.FinalScore
     $adjustedKeywords = $MatchedKeywords.Trim()
-    if (Test-IsAgencyConsultingEsnSignal -Title $Title -CompanyName $CompanyName) {
-        $adjustedScore = [Math]::Max(0, $adjustedScore - 8)
-        $adjustedKeywords = (Join-CleanTextParts @($adjustedKeywords, "possible agency/consulting/ESN")) -replace ", ", "; "
-        $MatchLevel = Get-MatchLevelFromScore $adjustedScore
+    $fitKeywordNotes = New-Object System.Collections.Generic.List[string]
+    if ([int]$fit.EmployerFit -lt 0) {
+        $fitKeywordNotes.Add(("employer preference: {0}" -f $fit.EmployerType)) | Out-Null
+    }
+    if ([int]$fit.LocationFit -lt 0) {
+        $fitKeywordNotes.Add(("location fit: {0}" -f $fit.LocationCategory)) | Out-Null
+    }
+    if ([int]$fit.SeniorityFit -lt 0) {
+        $fitKeywordNotes.Add(("seniority fit: {0}" -f $fit.SeniorityCategory)) | Out-Null
+    }
+    if ([int]$fit.ContractFit -lt 0) {
+        $fitKeywordNotes.Add(("contract fit: {0}" -f $fit.ContractCategory)) | Out-Null
+    }
+    if ($fitKeywordNotes.Count -gt 0) {
+        $adjustedKeywords = (Join-CleanTextParts @($adjustedKeywords, (($fitKeywordNotes.ToArray()) -join "; "))) -replace ", ", "; "
     }
 
     $SeenResultKeys[$key] = $true
@@ -761,11 +1123,18 @@ function New-JobResult {
         job_id         = $jobId
         job_title      = $Title.Trim()
         company_name   = $CompanyName.Trim()
+        employer_type  = [string]$fit.EmployerType
         location       = $JobLocation.Trim()
         contract_type  = $ContractType.Trim()
         match_score    = $adjustedScore
-        match_level    = $MatchLevel.Trim()
+        match_level    = ([string]$fit.MatchLevel).Trim()
         matched_keywords = $adjustedKeywords
+        role_score     = [string]$fit.RoleScore
+        employer_fit   = [string]$fit.EmployerFit
+        location_fit   = [string]$fit.LocationFit
+        seniority_fit  = [string]$fit.SeniorityFit
+        contract_fit   = [string]$fit.ContractFit
+        fit_notes      = [string]$fit.Notes
         feedback_adjustment = ""
         job_url        = ConvertTo-ExcelHyperlinkFormula -Url $Url -Label "Open"
         job_url_raw    = $Url.Trim()
@@ -963,7 +1332,7 @@ function Export-TrackerWorkbook {
                         $cell.Value2 = $value
                     }
                 }
-                elseif ($columnName -in @("match_score", "days_since_published", "days_since_first_seen", "days_since_last_seen", "feedback_adjustment")) {
+                elseif ($columnName -in @("match_score", "role_score", "employer_fit", "location_fit", "seniority_fit", "contract_fit", "days_since_published", "days_since_first_seen", "days_since_last_seen", "feedback_adjustment")) {
                     $number = 0
                     if ([int]::TryParse($value, [ref]$number)) {
                         $cell.Value2 = [string]$number
@@ -1005,7 +1374,7 @@ function Export-TrackerWorkbook {
         $jobsSheet.Cells.Font.Color = $darkTextColor
         $jobsSheet.Rows.Item(1).Font.Color = Get-ExcelColor 255 255 255
 
-        foreach ($columnName in @("duplicate_reason", "job_title", "matched_keywords", "job_url_raw", "notes")) {
+        foreach ($columnName in @("duplicate_reason", "job_title", "matched_keywords", "fit_notes", "job_url_raw", "notes")) {
             if ($columnIndex.ContainsKey($columnName)) {
                 $jobsSheet.Columns.Item([int]$columnIndex[$columnName]).WrapText = $true
             }
@@ -1026,7 +1395,7 @@ function Export-TrackerWorkbook {
             }
         }
         Set-JobTrackerColumnVisibility -Sheet $jobsSheet -ColumnIndex $columnIndex
-        foreach ($columnName in @("review_priority", "status", "contract_type", "platform", "source_count", "published_date", "days_since_published", "job_url", "applied_date", "match_level", "match_score", "seen_in_current_crawl", "first_seen_date", "last_seen_date", "is_new")) {
+        foreach ($columnName in @("review_priority", "status", "employer_type", "contract_type", "platform", "source_count", "published_date", "days_since_published", "job_url", "applied_date", "match_level", "match_score", "role_score", "employer_fit", "location_fit", "seniority_fit", "contract_fit", "seen_in_current_crawl", "first_seen_date", "last_seen_date", "is_new")) {
             if ($columnIndex.ContainsKey($columnName)) {
                 $jobsSheet.Columns.Item([int]$columnIndex[$columnName]).HorizontalAlignment = -4108
             }
@@ -1036,7 +1405,7 @@ function Export-TrackerWorkbook {
                 $jobsSheet.Columns.Item([int]$columnIndex[$columnName]).NumberFormat = "yyyy-mm-dd"
             }
         }
-        foreach ($columnName in @("source_count", "days_since_published", "match_score", "days_since_first_seen", "days_since_last_seen", "feedback_adjustment")) {
+        foreach ($columnName in @("source_count", "days_since_published", "match_score", "role_score", "employer_fit", "location_fit", "seniority_fit", "contract_fit", "days_since_first_seen", "days_since_last_seen", "feedback_adjustment")) {
             if ($columnIndex.ContainsKey($columnName)) {
                 $jobsSheet.Columns.Item([int]$columnIndex[$columnName]).NumberFormat = "0"
             }
@@ -1097,6 +1466,19 @@ function Export-TrackerWorkbook {
         $highVisibleCount = @($Rows | Where-Object { (Get-RowValue -Row $_ -Name "match_level") -eq "High" }).Count
         $mediumVisibleCount = @($Rows | Where-Object { (Get-RowValue -Row $_ -Name "match_level") -eq "Medium" }).Count
         $reviewVisibleCount = @($Rows | Where-Object { (Get-RowValue -Row $_ -Name "match_level") -eq "Review" }).Count
+        $employerTypeSummary = @(
+            "annonceur {0}" -f @($Rows | Where-Object { (Get-RowValue -Row $_ -Name "employer_type") -eq "annonceur" }).Count
+            "agency {0}" -f @($Rows | Where-Object { (Get-RowValue -Row $_ -Name "employer_type") -eq "agency" }).Count
+            "consulting {0}" -f @($Rows | Where-Object { (Get-RowValue -Row $_ -Name "employer_type") -eq "consulting" }).Count
+            "ESN {0}" -f @($Rows | Where-Object { (Get-RowValue -Row $_ -Name "employer_type") -eq "esn" }).Count
+            "unknown {0}" -f @($Rows | Where-Object { [string]::IsNullOrWhiteSpace((Get-RowValue -Row $_ -Name "employer_type")) -or (Get-RowValue -Row $_ -Name "employer_type") -eq "unknown" }).Count
+        ) -join " | "
+        $fitDemotionSummary = @(
+            "employer {0}" -f @($Rows | Where-Object { (Get-IntegerRowValue -Row $_ -Name "employer_fit") -lt 0 }).Count
+            "location {0}" -f @($Rows | Where-Object { (Get-IntegerRowValue -Row $_ -Name "location_fit") -lt 0 }).Count
+            "seniority {0}" -f @($Rows | Where-Object { (Get-IntegerRowValue -Row $_ -Name "seniority_fit") -lt 0 }).Count
+            "contract {0}" -f @($Rows | Where-Object { (Get-IntegerRowValue -Row $_ -Name "contract_fit") -lt 0 }).Count
+        ) -join " | "
         $summaryPairs = @(
             @("Generated", $RunStamp),
             @("Retention rule", "Keep non-application jobs only when Published is on or after $CutoffDate."),
@@ -1105,6 +1487,8 @@ function Export-TrackerWorkbook {
             @("New this run", [string]$newVisibleCount),
             @("Application rows kept", [string]$applicationVisibleCount),
             @("Match levels", ("High {0} | Medium {1} | Review {2}" -f $highVisibleCount, $mediumVisibleCount, $reviewVisibleCount)),
+            @("Employer types", $employerTypeSummary),
+            @("Fit demotions", $fitDemotionSummary),
             @("Total matched before contract filter", (Get-SummaryValue -Summary $Summary -Name "TotalMatched")),
             @("Excluded CDD/apprenticeship/internship", (Get-SummaryValue -Summary $Summary -Name "ExcludedContractCount")),
             @("Duplicates merged this run", (Get-SummaryValue -Summary $Summary -Name "DuplicateCount")),
@@ -1412,10 +1796,35 @@ function Merge-SimilarJobRows {
     $alternateUrls = @($urls | Where-Object { $_ -ne $primaryUrl })
 
     $maxScore = 0
+    $maxRoleScore = 0
+    $maxEmployerFit = -999
+    $maxLocationFit = -999
+    $maxSeniorityFit = -999
+    $maxContractFit = -999
     foreach ($row in $rowList) {
         $score = Get-IntegerRowValue -Row $row -Name "match_score"
         if ($score -gt $maxScore) {
             $maxScore = $score
+        }
+        $roleScore = Get-IntegerRowValue -Row $row -Name "role_score"
+        if ($roleScore -gt $maxRoleScore) {
+            $maxRoleScore = $roleScore
+        }
+        $employerFit = Get-IntegerRowValue -Row $row -Name "employer_fit"
+        if ($employerFit -gt $maxEmployerFit) {
+            $maxEmployerFit = $employerFit
+        }
+        $locationFit = Get-IntegerRowValue -Row $row -Name "location_fit"
+        if ($locationFit -gt $maxLocationFit) {
+            $maxLocationFit = $locationFit
+        }
+        $seniorityFit = Get-IntegerRowValue -Row $row -Name "seniority_fit"
+        if ($seniorityFit -gt $maxSeniorityFit) {
+            $maxSeniorityFit = $seniorityFit
+        }
+        $contractFit = Get-IntegerRowValue -Row $row -Name "contract_fit"
+        if ($contractFit -gt $maxContractFit) {
+            $maxContractFit = $contractFit
         }
     }
 
@@ -1437,9 +1846,22 @@ function Merge-SimilarJobRows {
     $values["source_count"] = [string]([Math]::Max(1, $urls.Count))
     $values["platform"] = Join-UniqueTextValues -Values @($rowList | ForEach-Object { Get-RowValue -Row $_ -Name "platform" })
     $values["matched_keywords"] = Join-UniqueTextValues -Values @($rowList | ForEach-Object { Get-RowValue -Row $_ -Name "matched_keywords" }) -SplitPattern "\s*;\s*|\s*,\s*"
+    $employerTypes = @(Get-UniqueTextValues -Values @($rowList | ForEach-Object { Get-RowValue -Row $_ -Name "employer_type" }))
+    foreach ($employerTypeCandidate in @("annonceur", "consulting", "agency", "esn", "unknown")) {
+        if ($employerTypes -contains $employerTypeCandidate) {
+            $values["employer_type"] = $employerTypeCandidate
+            break
+        }
+    }
     $values["duplicate_reason"] = Join-CleanTextParts $reasonParts
     $values["match_score"] = [string]$maxScore
     $values["match_level"] = Get-MatchLevelFromScore $maxScore
+    $values["role_score"] = [string]$maxRoleScore
+    $values["employer_fit"] = $(if ($maxEmployerFit -eq -999) { "" } else { [string]$maxEmployerFit })
+    $values["location_fit"] = $(if ($maxLocationFit -eq -999) { "" } else { [string]$maxLocationFit })
+    $values["seniority_fit"] = $(if ($maxSeniorityFit -eq -999) { "" } else { [string]$maxSeniorityFit })
+    $values["contract_fit"] = $(if ($maxContractFit -eq -999) { "" } else { [string]$maxContractFit })
+    $values["fit_notes"] = Join-UniqueTextValues -Values @($rowList | ForEach-Object { Get-RowValue -Row $_ -Name "fit_notes" }) -SplitPattern "\s*;\s*"
     $values["published_date"] = Get-LatestDateText -Rows $rowList -Name "published_date"
     $values["first_seen_date"] = Get-EarliestDateText -Rows $rowList -Name "first_seen_date"
     $values["last_seen_date"] = Get-LatestDateText -Rows $rowList -Name "last_seen_date"
@@ -1576,6 +1998,47 @@ function ConvertTo-TrackerRecord {
     $primaryUrl = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "job_url_raw") -Fallback (Get-RowValue -Row $ExistingRow -Name "job_url_raw")
     $allUrls = @(Get-RowUrlValues @($CurrentRow, $ExistingRow))
     $alternateUrls = @($allUrls | Where-Object { $_ -ne $primaryUrl })
+    $jobTitleValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "job_title") -Fallback (Get-RowValue -Row $ExistingRow -Name "job_title")
+    $companyNameValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "company_name") -Fallback (Get-RowValue -Row $ExistingRow -Name "company_name")
+    $locationValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "location") -Fallback (Get-RowValue -Row $ExistingRow -Name "location")
+    $contractTypeValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "contract_type") -Fallback (Get-RowValue -Row $ExistingRow -Name "contract_type")
+    $matchScoreValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "match_score") -Fallback (Get-RowValue -Row $ExistingRow -Name "match_score")
+    $matchedKeywordsValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "matched_keywords") -Fallback (Get-RowValue -Row $ExistingRow -Name "matched_keywords")
+    $employerTypeValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "employer_type") -Fallback (Get-RowValue -Row $ExistingRow -Name "employer_type")
+    $roleScoreValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "role_score") -Fallback (Get-RowValue -Row $ExistingRow -Name "role_score")
+    $employerFitValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "employer_fit") -Fallback (Get-RowValue -Row $ExistingRow -Name "employer_fit")
+    $locationFitValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "location_fit") -Fallback (Get-RowValue -Row $ExistingRow -Name "location_fit")
+    $seniorityFitValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "seniority_fit") -Fallback (Get-RowValue -Row $ExistingRow -Name "seniority_fit")
+    $contractFitValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "contract_fit") -Fallback (Get-RowValue -Row $ExistingRow -Name "contract_fit")
+    $fitNotesValue = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "fit_notes") -Fallback (Get-RowValue -Row $ExistingRow -Name "fit_notes")
+
+    if ([string]::IsNullOrWhiteSpace($employerTypeValue) -or
+        [string]::IsNullOrWhiteSpace($roleScoreValue) -or
+        [string]::IsNullOrWhiteSpace($employerFitValue) -or
+        [string]::IsNullOrWhiteSpace($locationFitValue) -or
+        [string]::IsNullOrWhiteSpace($seniorityFitValue) -or
+        [string]::IsNullOrWhiteSpace($contractFitValue) -or
+        [string]::IsNullOrWhiteSpace($fitNotesValue)) {
+        $roleBaseScore = 0
+        if (-not [int]::TryParse($roleScoreValue, [ref]$roleBaseScore)) {
+            [void][int]::TryParse($matchScoreValue, [ref]$roleBaseScore)
+        }
+        $fit = Get-JobFitDimensions `
+            -RoleScore $roleBaseScore `
+            -Title $jobTitleValue `
+            -CompanyName $companyNameValue `
+            -JobLocation $locationValue `
+            -ContractType $contractTypeValue `
+            -Text (Join-CleanTextParts @($matchedKeywordsValue, (Get-RowValue -Row $ExistingRow -Name "notes")))
+
+        if ([string]::IsNullOrWhiteSpace($employerTypeValue)) { $employerTypeValue = [string]$fit.EmployerType }
+        if ([string]::IsNullOrWhiteSpace($roleScoreValue)) { $roleScoreValue = [string]$fit.RoleScore }
+        if ([string]::IsNullOrWhiteSpace($employerFitValue)) { $employerFitValue = [string]$fit.EmployerFit }
+        if ([string]::IsNullOrWhiteSpace($locationFitValue)) { $locationFitValue = [string]$fit.LocationFit }
+        if ([string]::IsNullOrWhiteSpace($seniorityFitValue)) { $seniorityFitValue = [string]$fit.SeniorityFit }
+        if ([string]::IsNullOrWhiteSpace($contractFitValue)) { $contractFitValue = [string]$fit.ContractFit }
+        if ([string]::IsNullOrWhiteSpace($fitNotesValue)) { $fitNotesValue = [string]$fit.Notes }
+    }
 
     return New-OrderedJobRecord @{
         job_id                = $jobId
@@ -1591,13 +2054,20 @@ function ConvertTo-TrackerRecord {
         duplicate_reason      = $duplicateValue
         feedback_adjustment   = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "feedback_adjustment") -Fallback (Get-RowValue -Row $ExistingRow -Name "feedback_adjustment")
         review_priority       = Get-ReviewPriority -Status $status -MatchLevel $matchLevel -IsNew $isNew
-        job_title             = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "job_title") -Fallback (Get-RowValue -Row $ExistingRow -Name "job_title")
-        company_name          = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "company_name") -Fallback (Get-RowValue -Row $ExistingRow -Name "company_name")
-        location              = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "location") -Fallback (Get-RowValue -Row $ExistingRow -Name "location")
-        contract_type         = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "contract_type") -Fallback (Get-RowValue -Row $ExistingRow -Name "contract_type")
-        match_score           = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "match_score") -Fallback (Get-RowValue -Row $ExistingRow -Name "match_score")
+        job_title             = $jobTitleValue
+        company_name          = $companyNameValue
+        employer_type         = $employerTypeValue
+        location              = $locationValue
+        contract_type         = $contractTypeValue
+        match_score           = $matchScoreValue
         match_level           = $matchLevel
-        matched_keywords      = Get-PreferredValue -Primary (Get-RowValue -Row $CurrentRow -Name "matched_keywords") -Fallback (Get-RowValue -Row $ExistingRow -Name "matched_keywords")
+        matched_keywords      = $matchedKeywordsValue
+        role_score            = $roleScoreValue
+        employer_fit          = $employerFitValue
+        location_fit          = $locationFitValue
+        seniority_fit         = $seniorityFitValue
+        contract_fit          = $contractFitValue
+        fit_notes             = $fitNotesValue
         job_url               = ConvertTo-ExcelHyperlinkFormula -Url $primaryUrl -Label "Open"
         job_url_raw           = $primaryUrl
         alternate_urls        = ($alternateUrls -join "; ")
@@ -2071,7 +2541,7 @@ function Get-TitleFromWttjUrl {
     $slug = $slugMatch.Groups["slug"].Value
     $slug = ($slug -split "_")[0]
     $slug = $slug -replace "-", " "
-    return [Globalization.CultureInfo]::CurrentCulture.TextInfo.ToTitleCase($slug)
+    return Repair-DisplayText ([Globalization.CultureInfo]::CurrentCulture.TextInfo.ToTitleCase($slug))
 }
 
 function ConvertFrom-SlugToTitle {
@@ -2083,7 +2553,7 @@ function ConvertFrom-SlugToTitle {
 
     $clean = $Slug -replace "[-_]+", " "
     $clean = ([regex]::Replace($clean, "\s+", " ")).Trim()
-    return [Globalization.CultureInfo]::CurrentCulture.TextInfo.ToTitleCase($clean)
+    return Repair-DisplayText ([Globalization.CultureInfo]::CurrentCulture.TextInfo.ToTitleCase($clean))
 }
 
 function Join-CleanTextParts {
@@ -2197,10 +2667,38 @@ function Get-LocationFromText {
 
     $match = [regex]::Match($clean, "(?i)(?:\ba\s+|\b\xE0\s+|\bin\s+)(?<location>\p{L}[\p{L}\p{M}' -]{2,})(?:$|[,.])")
     if ($match.Success) {
-        return $match.Groups["location"].Value.Trim()
+        $location = $match.Groups["location"].Value.Trim()
+        if (-not (Test-IsJunkLocationText $location)) {
+            return $location
+        }
     }
 
     return ""
+}
+
+function Test-IsJunkLocationText {
+    param([AllowNull()][string]$Location)
+
+    if ([string]::IsNullOrWhiteSpace($Location)) {
+        return $true
+    }
+
+    $raw = ([string]$Location).Trim()
+    $clean = ConvertTo-MatchText $raw
+    if ([string]::IsNullOrWhiteSpace($clean)) {
+        return $true
+    }
+    if ($clean -match "^(h|f|m|x|nb|stage|internship|cdi|cdd|full\s*time|permanent)$") {
+        return $true
+    }
+    if ($raw -match "^[A-Za-z0-9]{5,14}$" -and $raw -match "\d" -and $raw -match "[A-Z]" -and $raw -match "[a-z]") {
+        return $true
+    }
+    if ($clean -match "^[a-z0-9]{8,}$" -and $clean -match "\d") {
+        return $true
+    }
+
+    return $false
 }
 
 function Get-WttjLocationFromUrl {
@@ -2227,7 +2725,12 @@ function Get-WttjLocationFromUrl {
         return ""
     }
 
-    return ConvertFrom-SlugToTitle $locationSlug
+    $location = ConvertFrom-SlugToTitle $locationSlug
+    if (Test-IsJunkLocationText $location) {
+        return ""
+    }
+
+    return $location
 }
 
 function Get-WttjLocation {
@@ -2451,7 +2954,7 @@ function Get-WelcomeKitJobs {
             $companyName = Get-WelcomeKitCompanyName -Job $job -JobUrl $jobUrl
             $jobLocation = Get-WelcomeKitLocation -Job $job -JobUrl $jobUrl
             $contractType = Get-ContractTypeFromText -Text $combined -RawContractType ([string]$job.contract_type)
-            $result = New-JobResult -Title ([string]$job.name) -CompanyName $companyName -JobLocation $jobLocation -ContractType $contractType -MatchScore $match.Score -MatchLevel $match.Level -MatchedKeywords $match.Keywords -Url $jobUrl -Platform "Welcome to the Jungle" -PublishedAt $publishedAt
+            $result = New-JobResult -Title ([string]$job.name) -CompanyName $companyName -JobLocation $jobLocation -ContractType $contractType -MatchScore $match.Score -MatchLevel $match.Level -MatchedKeywords $match.Keywords -Url $jobUrl -Platform "Welcome to the Jungle" -PublishedAt $publishedAt -SourceText $combined
             if ($null -ne $result) {
                 $results.Add($result) | Out-Null
             }
@@ -2554,7 +3057,7 @@ function Get-WttjPublicFallbackJobs {
         catch {
             if ($urlOnlyMatch) {
                 $jobLocation = Get-WttjLocation -Html "" -Url $candidate.Url -Title $candidate.SlugTitle
-                $fallbackResult = New-JobResult -Title $candidate.SlugTitle -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $urlText) -MatchScore $urlMatchResult.Score -MatchLevel $urlMatchResult.Level -MatchedKeywords $urlMatchResult.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $candidate.LastMod
+                $fallbackResult = New-JobResult -Title $candidate.SlugTitle -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $urlText) -MatchScore $urlMatchResult.Score -MatchLevel $urlMatchResult.Level -MatchedKeywords $urlMatchResult.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $candidate.LastMod -SourceText $urlText
                 if ($null -ne $fallbackResult) {
                     $results.Add($fallbackResult) | Out-Null
                 }
@@ -2565,7 +3068,7 @@ function Get-WttjPublicFallbackJobs {
         if ($html -match "(?i)<title>ERROR: The request could not be satisfied</title>|AwsWafIntegration|challenge-container") {
             if ($urlOnlyMatch) {
                 $jobLocation = Get-WttjLocation -Html $html -Url $candidate.Url -Title $candidate.SlugTitle
-                $fallbackResult = New-JobResult -Title $candidate.SlugTitle -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $urlText) -MatchScore $urlMatchResult.Score -MatchLevel $urlMatchResult.Level -MatchedKeywords $urlMatchResult.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $candidate.LastMod
+                $fallbackResult = New-JobResult -Title $candidate.SlugTitle -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $urlText) -MatchScore $urlMatchResult.Score -MatchLevel $urlMatchResult.Level -MatchedKeywords $urlMatchResult.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $candidate.LastMod -SourceText $urlText
                 if ($null -ne $fallbackResult) {
                     $results.Add($fallbackResult) | Out-Null
                 }
@@ -2602,7 +3105,7 @@ function Get-WttjPublicFallbackJobs {
         }
 
         $jobLocation = Get-WttjLocation -Html $html -Url $candidate.Url -Title $title
-        $result = New-JobResult -Title $title -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $combined) -MatchScore $match.Score -MatchLevel $match.Level -MatchedKeywords $match.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $publishedAt
+        $result = New-JobResult -Title $title -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $combined) -MatchScore $match.Score -MatchLevel $match.Level -MatchedKeywords $match.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $publishedAt -SourceText $combined
         if ($null -ne $result) {
             $results.Add($result) | Out-Null
         }
@@ -2725,7 +3228,7 @@ function Get-LinkedInJobs {
                 }
 
                 $contractType = Get-LinkedInContractType -Title $title -DetailText $detailText
-                $result = New-JobResult -Title $title -CompanyName $companyName -JobLocation $jobLocation -ContractType $contractType -MatchScore $match.Score -MatchLevel $match.Level -MatchedKeywords $match.Keywords -Url $jobUrl -Platform "LinkedIn" -PublishedAt $publishedAt
+                $result = New-JobResult -Title $title -CompanyName $companyName -JobLocation $jobLocation -ContractType $contractType -MatchScore $match.Score -MatchLevel $match.Level -MatchedKeywords $match.Keywords -Url $jobUrl -Platform "LinkedIn" -PublishedAt $publishedAt -SourceText $combined
                 if ($null -ne $result) {
                     $results.Add($result) | Out-Null
                 }
@@ -2737,6 +3240,72 @@ function Get-LinkedInJobs {
 
     Write-RunStatus ("LinkedIn complete: {0} matching jobs." -f $results.Count)
     return $results.ToArray()
+}
+
+function Assert-ScoringCondition {
+    param(
+        [bool]$Condition,
+        [string]$Message
+    )
+
+    if (-not $Condition) {
+        throw "Scoring self-test failed: $Message"
+    }
+}
+
+function Invoke-ScoringSelfTest {
+    $script:JobCrawlerPreferences = Get-JobCrawlerPreferences
+    $script:SeenResultKeys = @{}
+
+    $annonceurMatch = Get-JobMatch -Title "Web Analyst CRO" -Text "Google Tag Manager GA4 ContentSquare dataLayer tagging plan"
+    Assert-ScoringCondition -Condition $annonceurMatch.IsMatch -Message "Expected a Web Analyst CRO role with web analytics tools to match."
+    $annonceurResult = New-JobResult `
+        -Title "Web Analyst CRO" `
+        -CompanyName "Radio France" `
+        -JobLocation "Paris" `
+        -ContractType "CDI" `
+        -MatchScore $annonceurMatch.Score `
+        -MatchLevel $annonceurMatch.Level `
+        -MatchedKeywords $annonceurMatch.Keywords `
+        -Url "https://example.test/jobs/radio-france-web-analyst" `
+        -Platform "Test" `
+        -PublishedAt ([DateTimeOffset]::Now) `
+        -SourceText "Google Tag Manager GA4 ContentSquare dataLayer tagging plan"
+    Assert-ScoringCondition -Condition ((Get-RowValue -Row $annonceurResult -Name "employer_type") -eq "annonceur") -Message "Expected Radio France to be classified as annonceur."
+    Assert-ScoringCondition -Condition ((Get-IntegerRowValue -Row $annonceurResult -Name "match_score") -gt (Get-IntegerRowValue -Row $annonceurResult -Name "role_score")) -Message "Expected annonceur/Paris/CDI fit to boost the role score."
+
+    $consultingMatch = Get-JobMatch -Title "Digital Analytics Consultant" -Text "GA4 Google Tag Manager Piano Analytics ContentSquare"
+    $consultingResult = New-JobResult `
+        -Title "Digital Analytics Consultant" `
+        -CompanyName "fifty-five" `
+        -JobLocation "Paris" `
+        -ContractType "CDI" `
+        -MatchScore $consultingMatch.Score `
+        -MatchLevel $consultingMatch.Level `
+        -MatchedKeywords $consultingMatch.Keywords `
+        -Url "https://example.test/jobs/fifty-five-digital-analytics-consultant" `
+        -Platform "Test" `
+        -PublishedAt ([DateTimeOffset]::Now) `
+        -SourceText "GA4 Google Tag Manager Piano Analytics ContentSquare"
+    Assert-ScoringCondition -Condition ((Get-RowValue -Row $consultingResult -Name "employer_type") -eq "consulting") -Message "Expected fifty-five to be classified as consulting."
+    Assert-ScoringCondition -Condition ((Get-IntegerRowValue -Row $consultingResult -Name "employer_fit") -lt 0) -Message "Expected consulting employer type to be demoted, not excluded."
+
+    $dataEngineeringMatch = Get-JobMatch -Title "Data Analyst" -Text "python dbt snowflake airflow data warehouse data pipeline"
+    Assert-ScoringCondition -Condition (-not $dataEngineeringMatch.IsMatch) -Message "Expected warehouse/python data analyst role without web analytics signals to stay below the match threshold."
+
+    $junkLocation = Get-WttjLocationFromUrl "https://www.welcometothejungle.com/fr/companies/acme/jobs/web-analyst_5Kvvowa"
+    Assert-ScoringCondition -Condition ([string]::IsNullOrWhiteSpace($junkLocation)) -Message "Expected random WTTJ URL suffixes not to become city names."
+    $parisLocation = Get-WttjLocationFromUrl "https://www.welcometothejungle.com/fr/companies/acme/jobs/web-analyst_paris"
+    Assert-ScoringCondition -Condition ($parisLocation -eq "Paris") -Message "Expected readable WTTJ city suffix to be kept."
+
+    Write-Host "Scoring self-test passed."
+}
+
+$JobCrawlerPreferences = Get-JobCrawlerPreferences
+
+if ($SelfTest) {
+    Invoke-ScoringSelfTest
+    return
 }
 
 Set-RunWindowTitle "Analytics Job Crawler - Starting"

@@ -3,6 +3,7 @@ $script:JobTrackerColumnLabels = [ordered]@{
     status                = "Status"
     job_title             = "Job title"
     company_name          = "Company"
+    employer_type         = "Employer type"
     location              = "City / region"
     contract_type         = "Contract"
     platform              = "Sources"
@@ -15,6 +16,12 @@ $script:JobTrackerColumnLabels = [ordered]@{
     applied_date          = "Applied date"
     notes                 = "Apply notes"
     matched_keywords      = "Why it matched"
+    role_score            = "Role score"
+    employer_fit          = "Employer fit"
+    location_fit          = "Location fit"
+    seniority_fit         = "Seniority fit"
+    contract_fit          = "Contract fit"
+    fit_notes             = "Fit notes"
     seen_in_current_crawl = "Seen now"
     first_seen_date       = "First seen"
     last_seen_date        = "Last seen"
@@ -34,6 +41,7 @@ $script:JobTrackerMasterColumns = @(
     "status",
     "job_title",
     "company_name",
+    "employer_type",
     "location",
     "contract_type",
     "platform",
@@ -46,6 +54,12 @@ $script:JobTrackerMasterColumns = @(
     "match_level",
     "match_score",
     "matched_keywords",
+    "role_score",
+    "employer_fit",
+    "location_fit",
+    "seniority_fit",
+    "contract_fit",
+    "fit_notes",
     "seen_in_current_crawl",
     "first_seen_date",
     "last_seen_date",
@@ -65,6 +79,7 @@ $script:JobTrackerDailyReviewColumns = @(
     "status",
     "job_title",
     "company_name",
+    "employer_type",
     "location",
     "contract_type",
     "platform",
@@ -80,6 +95,12 @@ $script:JobTrackerDailyReviewColumns = @(
 $script:JobTrackerHiddenWorkbookColumns = @(
     "source_count",
     "match_score",
+    "role_score",
+    "employer_fit",
+    "location_fit",
+    "seniority_fit",
+    "contract_fit",
+    "fit_notes",
     "seen_in_current_crawl",
     "first_seen_date",
     "last_seen_date",
@@ -216,6 +237,7 @@ function Get-JobTrackerColumnSizing {
         status                = @{ Min = 10; Max = 14 }
         job_title             = @{ Min = 30; Max = 54 }
         company_name          = @{ Min = 16; Max = 30 }
+        employer_type         = @{ Min = 13; Max = 16 }
         location              = @{ Min = 14; Max = 28 }
         contract_type         = @{ Min = 10; Max = 18 }
         platform              = @{ Min = 12; Max = 28 }
@@ -228,6 +250,12 @@ function Get-JobTrackerColumnSizing {
         match_level           = @{ Min = 9; Max = 12 }
         match_score           = @{ Min = 7; Max = 8 }
         matched_keywords      = @{ Min = 26; Max = 60 }
+        role_score            = @{ Min = 9; Max = 11 }
+        employer_fit          = @{ Min = 9; Max = 11 }
+        location_fit          = @{ Min = 9; Max = 11 }
+        seniority_fit         = @{ Min = 10; Max = 12 }
+        contract_fit          = @{ Min = 9; Max = 11 }
+        fit_notes             = @{ Min = 20; Max = 48 }
         seen_in_current_crawl = @{ Min = 8; Max = 10 }
         first_seen_date       = @{ Min = 12; Max = 14 }
         last_seen_date        = @{ Min = 12; Max = 14 }

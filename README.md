@@ -29,6 +29,7 @@ Main review columns:
 - `Status`: `new`, `interesting`, `ignored`, `applied`, `interview`, `offer`, `rejected`, `withdrawn`
 - `Job title`
 - `Company`
+- `Employer type`: `annonceur`, `agency`, `consulting`, `esn`, or `unknown`
 - `City / region`
 - `Contract`
 - `Sources`
@@ -40,9 +41,9 @@ Main review columns:
 - `Match`
 - `Why it matched`
 
-Manual fields are `Status`, `Applied date`, and `Apply notes`. `Apply notes` has dropdown templates for ignored-job feedback. Backend fields such as `Score`, `Seen now`, `First seen`, `Last seen`, `New?`, `Duplicate / retention note`, `Job ID`, `Raw URL`, `Other URLs`, and `Source count` are hidden but kept for ranking, deduplication, status updates, and retention.
+Manual fields are `Status`, `Applied date`, and `Apply notes`. `Apply notes` has dropdown templates for ignored-job feedback. Backend fields such as `Score`, `Role score`, `Employer fit`, `Location fit`, `Seniority fit`, `Contract fit`, `Fit notes`, `Seen now`, `First seen`, `Last seen`, `New?`, `Duplicate / retention note`, `Job ID`, `Raw URL`, `Other URLs`, and `Source count` are hidden but kept for ranking, deduplication, status updates, and retention.
 
-`Summary` contains the latest crawl report, including the published-date retention rule and backup path.
+`Summary` contains the latest crawl report, including the published-date retention rule, match levels, employer-type distribution, fit demotions, and backup path.
 
 Close `jobs_tracker.xlsx` before launching the crawler so Excel does not lock the file.
 
@@ -120,12 +121,20 @@ The health check opens the workbook read-only and verifies the expected sheets, 
 
 ## Matching And Ranking
 
-Main matching signals:
+Main role-matching signals:
 
 - title signals: Web Analyst, Digital Analyst, Digital Analytics Consultant, Tracking, Web Analytics, digital performance, CRO, plus Data Analyst when another relevant signal is present
 - description/tool signals: Google Tag Manager, GTM, Google Analytics, GA4, Piano Analytics, ContentSquare, dataLayer, tagging plan, consent mode, A/B testing, dashboards, KPIs
 - ranking: `High` >= 80, `Medium` >= 50, `Review` >= 35
 - jobs with only description/tool matches and no analytics-related title are kept but capped at `Review`
+
+The final `Match` uses several dimensions:
+
+- `Role score`: web/digital analytics relevance from title and description
+- `Employer fit`: annonceur is favored; agency, consulting, and ESN are demoted but not excluded
+- `Location fit`: Paris/Ile-de-France/France/remote signals are favored; foreign locations are demoted
+- `Seniority fit`: internship/junior/managerial roles are demoted
+- `Contract fit`: CDI/permanent/full-time is favored; freelance is slightly demoted; CDD/apprenticeship/internship are excluded before export
 
 The tracker also uses your history:
 
@@ -133,6 +142,14 @@ The tracker also uses your history:
 - similar jobs to `ignored` can receive a score penalty
 - ignored jobs with structured `ignore_reason=...` notes teach the crawler more precisely: SEO/SEA rejects affect marketing roles, data-engineering rejects affect dbt/Snowflake/pipeline roles, and `duplicate` does not reduce relevance
 - agency/cabinet/ESN feedback is treated as an employer-type preference: strong Web/Digital Analytics roles are kept, but annonceur roles are favored for review
+
+You can tune fit weights and location patterns in:
+
+```text
+config\preferences.json
+```
+
+Keep the weights moderate if you want to avoid missing relevant jobs. The role score should remain the strongest signal; preference scores are mainly for ordering review priority.
 
 ## Deduplication
 
@@ -175,6 +192,7 @@ The crawler is manual-only. Nothing in this project is scheduled to run at Windo
 - Keep `output\jobs_tracker.xlsx` as the only working tracker file.
 - Keep recent files in `output\backups` only for rollback; old backups are pruned automatically.
 - Run `Test-JobTrackerHealth.ps1` after larger changes or if the workbook looks odd.
+- Run `Test-ScoringRules.ps1` after changing matching, feedback, or preference rules. It does not require Excel.
 - Shared workbook schema and styling helpers live in `JobTracker.Common.ps1`.
 
 ## Adjust Defaults

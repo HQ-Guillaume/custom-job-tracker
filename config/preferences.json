@@ -1,0 +1,58 @@
+{
+  "preferred_employer_type": "annonceur",
+  "employer_type_weights": {
+    "annonceur": 10,
+    "agency": -8,
+    "consulting": -8,
+    "esn": -10,
+    "unknown": 0
+  },
+  "location_fit_weights": {
+    "target": 8,
+    "france_other": -4,
+    "foreign": -20,
+    "unknown": 0
+  },
+  "seniority_fit_weights": {
+    "target": 0,
+    "senior_ok": 0,
+    "too_junior": -12,
+    "too_managerial": -12,
+    "unknown": 0
+  },
+  "contract_fit_weights": {
+    "preferred": 5,
+    "freelance": -4,
+    "excluded": -100,
+    "unknown": 0
+  },
+  "target_location_patterns": [
+    "paris",
+    "ile\\s*de\\s*france",
+    "la\\s+defense",
+    "puteaux",
+    "boulogne",
+    "courbevoie",
+    "nanterre",
+    "clichy",
+    "remote",
+    "teletravail",
+    "france"
+  ],
+  "foreign_location_patterns": [
+    "london",
+    "madrid",
+    "barcelona",
+    "casablanca",
+    "montreal",
+    "brussels",
+    "belgium",
+    "luxembourg",
+    "switzerland",
+    "cyprus",
+    "canada",
+    "morocco",
+    "spain",
+    "united\\s+kingdom"
+  ]
+}

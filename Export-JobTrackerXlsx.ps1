@@ -34,6 +34,76 @@ function Get-HeaderMap {
     return $headers
 }
 
+function Test-WorkbookSchemaNeedsRebuild {
+    param([hashtable]$Headers)
+
+    $columns = Get-JobTrackerMasterColumns
+    for ($index = 0; $index -lt $columns.Count; $index++) {
+        $columnName = $columns[$index]
+        $expectedColumn = $index + 1
+        if (-not $Headers.ContainsKey($columnName) -or [int]$Headers[$columnName] -ne $expectedColumn) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Rebuild-JobsSheetSchema {
+    param(
+        $Sheet,
+        [hashtable]$Headers,
+        [int]$RowCount
+    )
+
+    $columns = Get-JobTrackerMasterColumns
+    $meaningfulColumns = @("job_title", "job_id", "job_url_raw", "company_name")
+    $rows = New-Object System.Collections.Generic.List[hashtable]
+    for ($row = 2; $row -le $RowCount; $row++) {
+        $values = @{}
+        $hasValue = $false
+        foreach ($columnName in $Headers.Keys) {
+            $value = [string]$Sheet.Cells.Item($row, [int]$Headers[$columnName]).Text
+            if ($columnName -in $meaningfulColumns -and -not [string]::IsNullOrWhiteSpace($value)) {
+                $hasValue = $true
+            }
+            $values[$columnName] = $value
+        }
+
+        if ($hasValue) {
+            $rows.Add($values) | Out-Null
+        }
+    }
+
+    while ([int]$Sheet.ListObjects.Count -gt 0) {
+        $table = $Sheet.ListObjects.Item(1)
+        $table.Unlist()
+        Release-ComObject $table
+    }
+
+    $Sheet.Cells.Clear() | Out-Null
+    for ($index = 0; $index -lt $columns.Count; $index++) {
+        $columnName = $columns[$index]
+        $Sheet.Cells.Item(1, $index + 1).Value2 = Get-ColumnLabel $columnName
+    }
+
+    for ($rowIndex = 0; $rowIndex -lt $rows.Count; $rowIndex++) {
+        $values = $rows[$rowIndex]
+        for ($columnIndex = 0; $columnIndex -lt $columns.Count; $columnIndex++) {
+            $columnName = $columns[$columnIndex]
+            if ($values.ContainsKey($columnName)) {
+                $Sheet.Cells.Item($rowIndex + 2, $columnIndex + 1).Value2 = [string]$values[$columnName]
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        RowCount = [Math]::Max(1, $rows.Count + 1)
+        ColumnCount = $columns.Count
+        Headers = Get-HeaderMap -Sheet $Sheet -ColumnCount $columns.Count
+    }
+}
+
 $excel = $null
 $workbook = $null
 $sheet = $null
@@ -58,6 +128,12 @@ try {
     $rowCount = [int]$usedRange.Rows.Count
     $columnCount = [int]$usedRange.Columns.Count
     $headers = Get-HeaderMap -Sheet $sheet -ColumnCount $columnCount
+    if (Test-WorkbookSchemaNeedsRebuild -Headers $headers) {
+        $schema = Rebuild-JobsSheetSchema -Sheet $sheet -Headers $headers -RowCount $rowCount
+        $rowCount = [int]$schema.RowCount
+        $columnCount = [int]$schema.ColumnCount
+        $headers = $schema.Headers
+    }
 
     $darkTextColor = Get-ExcelColor 40 47 52
     $mutedTextColor = Get-ExcelColor 100 116 139
@@ -94,7 +170,7 @@ try {
         }
     }
 
-    foreach ($columnName in @("duplicate_reason", "job_title", "matched_keywords", "job_url_raw", "notes")) {
+    foreach ($columnName in @("duplicate_reason", "job_title", "matched_keywords", "fit_notes", "job_url_raw", "notes")) {
         if ($headers.ContainsKey($columnName)) {
             $sheet.Columns.Item([int]$headers[$columnName]).WrapText = $true
         }
@@ -115,7 +191,7 @@ try {
         }
     }
     Set-JobTrackerColumnVisibility -Sheet $sheet -ColumnIndex $headers
-    foreach ($columnName in @("review_priority", "status", "contract_type", "platform", "source_count", "published_date", "days_since_published", "job_url", "applied_date", "match_level", "match_score", "seen_in_current_crawl", "first_seen_date", "last_seen_date", "is_new")) {
+    foreach ($columnName in @("review_priority", "status", "employer_type", "contract_type", "platform", "source_count", "published_date", "days_since_published", "job_url", "applied_date", "match_level", "match_score", "role_score", "employer_fit", "location_fit", "seniority_fit", "contract_fit", "seen_in_current_crawl", "first_seen_date", "last_seen_date", "is_new")) {
         if ($headers.ContainsKey($columnName)) {
             $sheet.Columns.Item([int]$headers[$columnName]).HorizontalAlignment = -4108
         }
@@ -125,7 +201,7 @@ try {
             $sheet.Columns.Item([int]$headers[$columnName]).NumberFormat = "yyyy-mm-dd"
         }
     }
-    foreach ($columnName in @("source_count", "days_since_published", "match_score", "days_since_first_seen", "days_since_last_seen", "feedback_adjustment")) {
+    foreach ($columnName in @("source_count", "days_since_published", "match_score", "role_score", "employer_fit", "location_fit", "seniority_fit", "contract_fit", "days_since_first_seen", "days_since_last_seen", "feedback_adjustment")) {
         if ($headers.ContainsKey($columnName)) {
             $sheet.Columns.Item([int]$headers[$columnName]).NumberFormat = "0"
         }
