@@ -86,6 +86,7 @@ Useful ignored reasons:
 - `ignore_reason=too_bi_reporting; detail=`
 - `ignore_reason=too_crm_emailing; detail=`
 - `ignore_reason=too_content_social; detail=`
+- `ignore_reason=agency_consulting_esn; detail=`
 - `ignore_reason=wrong_seniority; detail=`
 - `ignore_reason=wrong_location; detail=`
 - `ignore_reason=company_not_interested; detail=`
@@ -131,6 +132,7 @@ The tracker also uses your history:
 - similar jobs to `applied`, `interview`, `offer`, or `interesting` can receive a small score boost
 - similar jobs to `ignored` can receive a score penalty
 - ignored jobs with structured `ignore_reason=...` notes teach the crawler more precisely: SEO/SEA rejects affect marketing roles, data-engineering rejects affect dbt/Snowflake/pipeline roles, and `duplicate` does not reduce relevance
+- agency/cabinet/ESN feedback is treated as an employer-type preference: strong Web/Digital Analytics roles are kept, but annonceur roles are favored for review
 
 ## Deduplication
 

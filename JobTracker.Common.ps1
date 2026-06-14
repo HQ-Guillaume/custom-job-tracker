@@ -130,6 +130,7 @@ function Get-JobTrackerIgnoreReasonOptions {
         "ignore_reason=too_content_social; detail=",
         "ignore_reason=too_product_analytics; detail=",
         "ignore_reason=too_managerial; detail=",
+        "ignore_reason=agency_consulting_esn; detail=",
         "ignore_reason=wrong_seniority; detail=",
         "ignore_reason=wrong_location; detail=",
         "ignore_reason=wrong_remote_policy; detail=",
@@ -201,6 +202,9 @@ function Get-IgnoreReasonFromNotes {
     }
     if ($normalized -match "bi|reporting|dashboard") {
         return "too_bi_reporting"
+    }
+    if ($normalized -match "agency|agence|cabinet|consulting|conseil|esn|ssii") {
+        return "agency_consulting_esn"
     }
 
     return ""

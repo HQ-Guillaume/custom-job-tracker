@@ -690,6 +690,32 @@ function Test-IsExcludedContractType {
     return $contractText -match "\bcdd\b|apprenticeship|apprentissage|alternance|internship|\bstage\b|stagiaire|temporary|fixed\s+term"
 }
 
+function Test-IsAgencyConsultingEsnSignal {
+    param(
+        [AllowNull()][string]$Title,
+        [AllowNull()][string]$CompanyName,
+        [AllowNull()][string]$Text = ""
+    )
+
+    $titleText = ConvertTo-MatchText $Title
+    $companyText = ConvertTo-MatchText $CompanyName
+    $combinedText = ConvertTo-MatchText (Join-CleanTextParts @($Title, $CompanyName, $Text))
+    $knownServiceCompanyPattern = "fifty\s*five|\b55\b|converteo|artefact|optimal\s+ways|innoha|nexton|scalian|amaris|cgi|infotel|oventi|keyrus|micropole|business\s+&?\s+decision|devoteam|onepoint|talan|wavestone|mc2i|sopra\s+steria|capgemini|accenture|deloitte|pwc|ey|kpmg|publicis|dentsu|havas|labelium|pixalione|eskimoz|allmatik|leonar|consort|niji|sql[iy]|jellyfish|ekinox"
+    $serviceContextPattern = "\bagence\b|agency|cabinet\s+(de\s+)?conseil|soci[eé]t[eé]\s+de\s+conseil|\bconseil\b|consulting\s+(firm|agency|company|cabinet)|\besn\b|\bssii\b|services\s+num[eé]riques|chez\s+nos\s+clients|missions?\s+chez\s+les?\s+clients"
+
+    if (-not [string]::IsNullOrWhiteSpace($companyText) -and $companyText -match $knownServiceCompanyPattern) {
+        return $true
+    }
+    if ($combinedText -match $serviceContextPattern) {
+        return $true
+    }
+    if ($titleText -match "\bconsultant(e)?\b|consultant\s+web|consultant\s+digital|consultant\s+analytics|consultant\s+tracking") {
+        return $true
+    }
+
+    return $false
+}
+
 function Test-IsAppliedStatus {
     param([AllowNull()][string]$Status)
 
@@ -722,6 +748,13 @@ function New-JobResult {
 
     $identityKey = Get-JobIdentityKeyFromValues -Title $Title -CompanyName $CompanyName -JobLocation $JobLocation -Url $Url
     $jobId = Get-StableJobId $identityKey
+    $adjustedScore = $MatchScore
+    $adjustedKeywords = $MatchedKeywords.Trim()
+    if (Test-IsAgencyConsultingEsnSignal -Title $Title -CompanyName $CompanyName) {
+        $adjustedScore = [Math]::Max(0, $adjustedScore - 8)
+        $adjustedKeywords = (Join-CleanTextParts @($adjustedKeywords, "possible agency/consulting/ESN")) -replace ", ", "; "
+        $MatchLevel = Get-MatchLevelFromScore $adjustedScore
+    }
 
     $SeenResultKeys[$key] = $true
     [PSCustomObject]@{
@@ -730,9 +763,9 @@ function New-JobResult {
         company_name   = $CompanyName.Trim()
         location       = $JobLocation.Trim()
         contract_type  = $ContractType.Trim()
-        match_score    = $MatchScore
+        match_score    = $adjustedScore
         match_level    = $MatchLevel.Trim()
-        matched_keywords = $MatchedKeywords.Trim()
+        matched_keywords = $adjustedKeywords
         feedback_adjustment = ""
         job_url        = ConvertTo-ExcelHyperlinkFormula -Url $Url -Label "Open"
         job_url_raw    = $Url.Trim()
@@ -1620,6 +1653,18 @@ function Get-FeedbackProfileText {
     ))
 }
 
+function Test-FeedbackRowHasAgencyConsultingEsnSignal {
+    param([AllowNull()]$Row)
+
+    return Test-IsAgencyConsultingEsnSignal `
+        -Title (Get-RowValue -Row $Row -Name "job_title") `
+        -CompanyName (Get-RowValue -Row $Row -Name "company_name") `
+        -Text (Join-CleanTextParts @(
+            (Get-RowValue -Row $Row -Name "matched_keywords"),
+            (Get-RowValue -Row $Row -Name "notes")
+        ))
+}
+
 function Get-FeedbackSeniorityBucket {
     param([string]$Text)
 
@@ -1706,6 +1751,11 @@ function Get-IgnoredFeedbackPenalty {
             $rowBucket = Get-FeedbackSeniorityBucket $rowText
             if ($rowBucket -eq "management") {
                 return [PSCustomObject]@{ Penalty = 16; Reason = "ignored reason: too managerial" }
+            }
+        }
+        "agency_consulting_esn" {
+            if ((Test-FeedbackRowHasAgencyConsultingEsnSignal $Row) -or $SameCompany -or $SameTitle) {
+                return [PSCustomObject]@{ Penalty = 18; Reason = "ignored reason: agency/consulting/ESN preference" }
             }
         }
         "wrong_seniority" {
