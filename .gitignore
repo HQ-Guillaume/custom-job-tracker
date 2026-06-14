@@ -1,0 +1,22 @@
+# Personal tracker output
+output/
+*.xlsx
+*.xlsm
+*.xls
+
+# Local secrets and environment files
+.env
+.env.*
+*.secret
+*.key
+
+# PowerShell and Windows local artifacts
+*.log
+*.tmp
+Thumbs.db
+Desktop.ini
+
+# Editor folders
+.vscode/
+.idea/
+

@@ -1,0 +1,29 @@
+name: PowerShell check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  parse:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse PowerShell scripts
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path . -Filter *.ps1 -File
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) {
+              Write-Error "Parse errors in $($file.Name): $($errors | ForEach-Object { $_.Message } | Out-String)"
+            }
+            else {
+              Write-Host "OK $($file.Name)"
+            }
+          }
+
