@@ -43,6 +43,19 @@ function ConvertTo-CommandLineArgument {
     return '"' + ($text.Replace('"', '\"')) + '"'
 }
 
+function ConvertTo-CommandLineSwitch {
+    param([AllowNull()][string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return ""
+    }
+    if ($Name.StartsWith("-")) {
+        return $Name
+    }
+
+    return "-$Name"
+}
+
 function Get-LauncherPowerShellPath {
     $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     if (Test-Path -LiteralPath $windowsPowerShell) {
@@ -318,14 +331,27 @@ function Start-CrawlerFromGui {
         $sourceKey = [string]$metadata.Key
         if ($sourceKey -eq "wttj_public") {
             $wttjPublicChecked = $checkbox.Checked
+            $skipSwitch = ConvertTo-CommandLineSwitch ([string]$metadata.SkipSwitch)
+            if (-not $checkbox.Checked -and -not [string]::IsNullOrWhiteSpace($skipSwitch)) {
+                [void]$arguments.Add($skipSwitch)
+            }
             continue
         }
         if ($sourceKey -eq "welcome_kit") {
             $welcomeKitChecked = $checkbox.Checked
+            $skipSwitch = ConvertTo-CommandLineSwitch ([string]$metadata.SkipSwitch)
+            $enableSwitch = ConvertTo-CommandLineSwitch ([string]$metadata.EnableSwitch)
+            if ($checkbox.Checked -and -not [string]::IsNullOrWhiteSpace($enableSwitch)) {
+                [void]$arguments.Add($enableSwitch)
+            }
+            elseif (-not $checkbox.Checked -and -not [string]::IsNullOrWhiteSpace($skipSwitch)) {
+                [void]$arguments.Add($skipSwitch)
+            }
+            continue
         }
 
-        $skipSwitch = [string]$metadata.Skip
-        $enableSwitch = [string]$metadata.Enable
+        $skipSwitch = ConvertTo-CommandLineSwitch ([string]$metadata.SkipSwitch)
+        $enableSwitch = ConvertTo-CommandLineSwitch ([string]$metadata.EnableSwitch)
         if ($checkbox.Checked -and -not [string]::IsNullOrWhiteSpace($enableSwitch)) {
             [void]$arguments.Add($enableSwitch)
         }
@@ -559,9 +585,13 @@ $script:ModeComboBox = $modeCombo
 $modeCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $modeCombo.Location = New-Object System.Drawing.Point(92, 27)
 $modeCombo.Size = New-Object System.Drawing.Size(130, 24)
-[void]$modeCombo.Items.Add("Fast")
-[void]$modeCombo.Items.Add("Default")
-[void]$modeCombo.Items.Add("Deep")
+$modeNames = @($script:CrawlerConfig.CrawlModes.modes.PSObject.Properties.Name)
+if ($modeNames.Count -eq 0) {
+    $modeNames = @("Fast", "Default", "Deep")
+}
+foreach ($modeName in $modeNames) {
+    [void]$modeCombo.Items.Add([string]$modeName)
+}
 $defaultMode = [string](Get-ConfigPathValue -Object $script:CrawlerConfig.Runtime -Path "defaults.crawl_mode" -DefaultValue "Default")
 if ($modeCombo.Items.Contains($defaultMode)) {
     $modeCombo.SelectedItem = $defaultMode
@@ -577,23 +607,15 @@ $sourceLabel.Location = New-Object System.Drawing.Point(16, 66)
 $sourceLabel.Size = New-Object System.Drawing.Size(100, 22)
 $settingsGroup.Controls.Add($sourceLabel)
 
-$sourceDefinitions = @(
-    @{ Key = "apec"; Label = "APEC"; Skip = "-SkipApec"; Enable = ""; Default = $true },
-    @{ Key = "hellowork"; Label = "HelloWork"; Skip = "-SkipHelloWork"; Enable = ""; Default = $true },
-    @{ Key = "wttj_public"; Label = "WTTJ public"; Skip = "-SkipWttj"; Enable = ""; Default = $true },
-    @{ Key = "linkedin"; Label = "LinkedIn public"; Skip = "-SkipLinkedIn"; Enable = ""; Default = $true },
-    @{ Key = "france_travail"; Label = "France Travail API"; Skip = "-SkipFranceTravail"; Enable = "-EnableFranceTravail"; Default = $false },
-    @{ Key = "adzuna"; Label = "Adzuna API"; Skip = "-SkipAdzuna"; Enable = "-EnableAdzuna"; Default = $false },
-    @{ Key = "welcome_kit"; Label = "WelcomeKit API"; Skip = ""; Enable = "-EnableWelcomeKit"; Default = $false }
-)
+$sourceDefinitions = @(Get-JobCrawlerSourceDefinitions -SourcesConfig $script:CrawlerConfig.Sources)
 
 $sourceTop = 92
 for ($i = 0; $i -lt $sourceDefinitions.Count; $i++) {
     $definition = $sourceDefinitions[$i]
     $checkbox = New-Object System.Windows.Forms.CheckBox
-    $checkbox.Text = [string]$definition.Label
-    $checkbox.Tag = [PSCustomObject]$definition
-    $checkbox.Checked = Test-JobCrawlerSourceEnabledByDefault -SourcesConfig $script:CrawlerConfig.Sources -SourceKey ([string]$definition.Key) -DefaultValue ([bool]$definition.Default)
+    $checkbox.Text = [string]$definition.ShortLabel
+    $checkbox.Tag = $definition
+    $checkbox.Checked = [bool]$definition.EnabledByDefault
     $checkbox.Location = New-Object System.Drawing.Point((16 + (($i % 2) * 160)), ($sourceTop + ([Math]::Floor($i / 2) * 26)))
     $checkbox.Size = New-Object System.Drawing.Size(154, 24)
     $settingsGroup.Controls.Add($checkbox)

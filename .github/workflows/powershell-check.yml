@@ -37,6 +37,10 @@ jobs:
         shell: pwsh
         run: ./dev-tools/Test-ParserFixtures.ps1
 
+      - name: Run integration tests
+        shell: pwsh
+        run: ./dev-tools/Test-Integration.ps1
+
       - name: Validate crawler config
         shell: pwsh
         run: ./dev-tools/Test-JobCrawlerConfig.ps1

@@ -13,9 +13,7 @@ echo Main file: output\jobs_tracker.xlsx
 echo.
 
 set "CRAWL_MODE=%~1"
-if /I "%CRAWL_MODE%"=="Fast" goto mode_selected
-if /I "%CRAWL_MODE%"=="Default" goto mode_selected
-if /I "%CRAWL_MODE%"=="Deep" goto mode_selected
+if not "%CRAWL_MODE%"=="" goto mode_selected
 
 echo Choose crawl mode:
 echo   [F] Fast    - quicker, lighter coverage

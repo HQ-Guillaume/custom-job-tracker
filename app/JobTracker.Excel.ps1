@@ -502,6 +502,8 @@ function Export-TrackerWorkbook {
             @("Rows removed by retention", (Get-SummaryValue -Summary $Summary -Name "RemovedCount")),
             @("Source diagnostics", (Get-SummaryValue -Summary $Summary -Name "SourceDiagnostics")),
             @("Diagnostic file", (Get-SummaryValue -Summary $Summary -Name "DiagnosticPath")),
+            @("Cache pruning", ("{0} file(s), {1} MB removed | {2} MB remaining" -f (Get-SummaryValue -Summary $Summary -Name "CachePrunedFiles"), (Get-SummaryValue -Summary $Summary -Name "CachePrunedMB"), (Get-SummaryValue -Summary $Summary -Name "CacheRemainingMB"))),
+            @("Run history", (Get-SummaryValue -Summary $Summary -Name "RunHistoryPath")),
             @("Backup", (Get-SummaryValue -Summary $Summary -Name "BackupPath")),
             @("Tracker", $fullPath),
             @("Manual fields", "Status, Applied date, Apply notes with ignore_reason templates"),
@@ -539,12 +541,12 @@ function Export-TrackerWorkbook {
         }
         $sourceDefaultSummary = "No source metadata"
         if (Get-Variable -Name JobCrawlerSourcesConfig -Scope Script -ErrorAction SilentlyContinue) {
-            $sourceKeys = @(Get-ConfigStringArray (Get-ConfigPathValue -Object $script:JobCrawlerSourcesConfig -Path "source_order" -DefaultValue @()))
-            if ($sourceKeys.Count -gt 0) {
-                $sourceDefaultSummary = ($sourceKeys | ForEach-Object {
-                    "{0}: {1}{2}" -f $_,
-                        $(if (Test-JobCrawlerSourceEnabledByDefault -SourcesConfig $script:JobCrawlerSourcesConfig -SourceKey $_ -DefaultValue $true) { "on" } else { "off" }),
-                        $(if (Test-JobCrawlerSourceRequiresCredentials -SourcesConfig $script:JobCrawlerSourcesConfig -SourceKey $_) { " (credentials)" } else { "" })
+            $sourceDefinitions = @(Get-JobCrawlerSourceDefinitions -SourcesConfig $script:JobCrawlerSourcesConfig)
+            if ($sourceDefinitions.Count -gt 0) {
+                $sourceDefaultSummary = ($sourceDefinitions | ForEach-Object {
+                    "{0}: {1}{2}" -f $_.Key,
+                        $(if ($_.EnabledByDefault) { "on" } else { "off" }),
+                        $(if ($_.RequiresCredential) { " (credentials)" } else { "" })
                 }) -join " | "
             }
         }
@@ -562,6 +564,7 @@ function Export-TrackerWorkbook {
             @("Diagnostics mode", (Get-SummaryValue -Summary $Summary -Name "DiagnosticMode")),
             @("Diagnostic file", (Get-SummaryValue -Summary $Summary -Name "DiagnosticPath")),
             @("Crawl caps", (Get-SummaryValue -Summary $Summary -Name "CrawlCaps")),
+            @("Run history", (Get-SummaryValue -Summary $Summary -Name "RunHistoryPath")),
             @("Credential status", $credentialSummary),
             @("LinkedIn queries", [string](@($LinkedInQueries).Count)),
             @("API queries", [string](@($ApiSearchQueries).Count)),

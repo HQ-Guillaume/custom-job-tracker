@@ -115,6 +115,39 @@ function Invoke-ScoringSelfTest {
     Assert-ScoringCondition -Condition ([string]::IsNullOrWhiteSpace($junkLocation)) -Message "Expected random WTTJ URL suffixes not to become city names."
     $parisLocation = Get-WttjLocationFromUrl "https://www.welcometothejungle.com/fr/companies/acme/jobs/web-analyst_paris"
     Assert-ScoringCondition -Condition ($parisLocation -eq "Paris") -Message "Expected readable WTTJ city suffix to be kept."
+    $multiPartUrlLocation = Get-WttjLocationFromUrl "https://www.welcometothejungle.com/en/companies/acme/jobs/web-analyst_london_ACME_3zgazPX"
+    Assert-ScoringCondition -Condition ($multiPartUrlLocation -eq "London") -Message "Expected WTTJ URL city suffixes before reference tokens to be parsed."
+    $wttjInitialDataHtml = 'window.__INITIAL_DATA__ = "{\"queries\":[{\"state\":{\"data\":{\"offices\":[{\"city\":\"Saint-Denis\",\"country_code\":\"FR\"}]}}}]}";'
+    $wttjInitialDataLocation = Get-WttjLocation -Html $wttjInitialDataHtml -Url "https://www.welcometothejungle.com/fr/companies/acme/jobs/web-analyst_5Kvvowa" -Title "Web Analyst"
+    Assert-ScoringCondition -Condition ($wttjInitialDataLocation -eq "Saint-Denis, France") -Message "Expected WTTJ embedded office city and country code to be parsed."
+    Assert-ScoringCondition -Condition (-not (Test-IsWttjLocationAllowed -JobLocation "New York, United States" -Url "https://www.welcometothejungle.com/fr/companies/acme/jobs/web-analyst_new-york" -Text "Web Analyst")) -Message "Expected foreign WTTJ locations to be rejected for France crawls."
+    Assert-ScoringCondition -Condition (-not (Test-IsWttjLocationAllowed -JobLocation "" -Url "https://www.welcometothejungle.com/fr/companies/acme/jobs/web-analyst_5Kvvowa" -Text "Web Analyst")) -Message "Expected blank WTTJ locations to be rejected for France crawls."
+    $invalidExistingWttjRow = New-OrderedJobRecord @{
+        status         = "ignored"
+        job_title      = "Web Analyst"
+        company_name   = "Example Company"
+        location       = ""
+        contract_type  = "CDI"
+        match_score    = "80"
+        match_level    = "Good"
+        job_url_raw    = "https://www.welcometothejungle.com/en/companies/acme/jobs/web-analyst_london_ACME_3zgazPX"
+        platform       = "Welcome to the Jungle"
+        published_date = ([DateTimeOffset]::Now.ToString("yyyy-MM-dd"))
+    }
+    $foreignExistingWttjRow = New-OrderedJobRecord @{
+        status         = "ignored"
+        job_title      = "Web Analyst Casablanca"
+        company_name   = "Example Company"
+        location       = "Casablanca"
+        contract_type  = "CDI"
+        match_score    = "80"
+        match_level    = "Good"
+        job_url_raw    = "https://www.welcometothejungle.com/fr/companies/acme/jobs/web-analyst_casablanca"
+        platform       = "Welcome to the Jungle"
+        published_date = ([DateTimeOffset]::Now.ToString("yyyy-MM-dd"))
+    }
+    $invalidMerge = Merge-JobsWithTracker -CurrentRows @() -ExistingRows @($invalidExistingWttjRow, $foreignExistingWttjRow) -Path "selftest.xlsx" -SkipBackup
+    Assert-ScoringCondition -Condition ([int]$invalidMerge.RemovedCount -eq 2 -and @($invalidMerge.TrackerRows).Count -eq 0) -Message "Expected invalid existing non-applied WTTJ rows to be removed during merge."
 
     $franceTravailMock = [PSCustomObject]@{
         id                  = "123ABC"

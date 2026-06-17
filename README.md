@@ -71,6 +71,7 @@ Close `jobs_tracker.xlsx` before launching the crawler so Excel does not lock th
 5. Use `output\jobs_tracker.xlsx` as your private tracker.
 
 The public release does not include a real tracker workbook. Each user creates their own local workbook.
+Source checkboxes and crawl modes are read from `config\sources.json` and `config\crawl_modes.json`, so public defaults and private local overrides stay in one place.
 
 ## Launch
 
@@ -107,6 +108,8 @@ Run-AnalyticsJobCrawler.cmd Fast
 Run-AnalyticsJobCrawler.cmd Default
 Run-AnalyticsJobCrawler.cmd Deep
 ```
+
+Custom modes added to `config\crawl_modes.json` can also be passed directly to the command launcher.
 
 or run:
 
@@ -161,11 +164,12 @@ Useful ignored reasons:
 
 ## Outputs
 
-The crawler writes only the main workbook:
+The crawler keeps these local output files:
 
 - `output\jobs_tracker.xlsx`: source of truth
 - `output\backups\*.xlsx`: recent automatic workbook backups before tracker/status updates
 - `output\cache\*`: local detail-page cache for slow public sources
+- `output\run_history.jsonl`: compact local run history for troubleshooting crawl duration and source health
 
 These files are local personal data and are not committed to the GitHub repository.
 
@@ -408,6 +412,7 @@ The crawler is manual-only. Nothing in this project is scheduled to run at Windo
 - Run `dev-tools\Test-JobTrackerHealth.ps1` after larger changes or if the workbook looks odd.
 - Run `dev-tools\Test-ScoringRules.ps1` after changing matching, feedback, or preference rules. It does not require Excel.
 - Run `dev-tools\Test-ParserFixtures.ps1` after changing APEC, HelloWork, LinkedIn, or dedupe parsing. It does not require Excel or network access.
+- Run `dev-tools\Test-Integration.ps1` after changing source orchestration, deduplication, cache pruning, or run history.
 - Run `dev-tools\Test-ReleaseSafety.ps1` before publishing a public release.
 - Shared workbook schema and styling helpers live in `JobTracker.Common.ps1`.
 
@@ -422,6 +427,8 @@ You can disable individual sources for diagnostics:
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Find-AnalyticsJobs.ps1 -SkipFranceTravail -SkipAdzuna -SkipApec -SkipHelloWork -SkipWttj -SkipLinkedIn
 ```
+
+For Welcome to the Jungle specifically, `-SkipWttj` disables both the public fallback and WelcomeKit. Use `-DisableWttjPublicFallback` or `-DisableWelcomeKit` only when you want to disable one WTTJ path and keep the other available.
 
 Useful speed knobs:
 

@@ -609,6 +609,44 @@ function Group-RowsByDedupeKey {
     return $groups
 }
 
+function Test-IsInvalidExistingTrackerRow {
+    param([AllowNull()]$Row)
+
+    if ($null -eq $Row) {
+        return $false
+    }
+
+    $platform = Get-RowValue -Row $Row -Name "platform"
+    if ($platform -notmatch "(?i)welcome\s+to\s+the\s+jungle|wttj") {
+        return $false
+    }
+
+    $locationCheck = Get-Command "Test-IsWttjLocationAllowed" -ErrorAction SilentlyContinue
+    if ($null -eq $locationCheck) {
+        return $false
+    }
+
+    $location = Get-RowValue -Row $Row -Name "location"
+    $url = Get-RowValue -Row $Row -Name "job_url_raw"
+    if ([string]::IsNullOrWhiteSpace($location)) {
+        return $true
+    }
+    if (Test-IsWttjKnownForeignLocation $location) {
+        return $true
+    }
+    if (Test-IsWttjKnownForeignLocation (Get-WttjLocationFromUrl $url)) {
+        return $true
+    }
+
+    $text = Join-CleanTextParts @(
+        (Get-RowValue -Row $Row -Name "job_title"),
+        (Get-RowValue -Row $Row -Name "company_name"),
+        $url
+    )
+
+    return (-not (Test-IsWttjLocationAllowed -JobLocation $location -Url $url -Text $text))
+}
+
 function Merge-JobsWithTracker {
     param(
         [object[]]$CurrentRows,
@@ -688,6 +726,9 @@ function Merge-JobsWithTracker {
         if (Test-IsKeepForeverStatus (Get-RowValue -Row $existing -Name "status")) {
             $trackerByKey[$key] = ConvertTo-TrackerRecord -CurrentRow $existing -ExistingRow $existing -SeenInCurrentCrawl:$false -DuplicateReason "kept by application status"
             $preservedAppliedCount++
+        }
+        elseif (Test-IsInvalidExistingTrackerRow $existing) {
+            $removedCount++
         }
         elseif (Test-IsExcludedContractType (Get-RowValue -Row $existing -Name "contract_type")) {
             $removedCount++

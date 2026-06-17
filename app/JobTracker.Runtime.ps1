@@ -235,6 +235,176 @@ function Get-SourceStatsSummaryText {
     return ($parts -join " | ")
 }
 
+function Get-JobCrawlerAcceptLanguage {
+    if (Get-Variable -Name JobCrawlerRuntimeConfig -Scope Script -ErrorAction SilentlyContinue) {
+        return [string](Get-ConfigPathValue -Object $script:JobCrawlerRuntimeConfig -Path "http.accept_language" -DefaultValue "fr-FR,fr;q=0.9,en;q=0.8")
+    }
+
+    return "fr-FR,fr;q=0.9,en;q=0.8"
+}
+
+function Get-JobCrawlerHttpRetryPolicy {
+    $maxRetries = 2
+    $retryDelayMs = 1200
+    $backoff = 2.0
+    if (Get-Variable -Name JobCrawlerRuntimeConfig -Scope Script -ErrorAction SilentlyContinue) {
+        $maxRetries = [int](Get-ConfigPathValue -Object $script:JobCrawlerRuntimeConfig -Path "http.max_retries" -DefaultValue $maxRetries)
+        $retryDelayMs = [int](Get-ConfigPathValue -Object $script:JobCrawlerRuntimeConfig -Path "http.retry_delay_ms" -DefaultValue $retryDelayMs)
+        $backoff = [double](Get-ConfigPathValue -Object $script:JobCrawlerRuntimeConfig -Path "http.retry_backoff_multiplier" -DefaultValue $backoff)
+    }
+
+    return [PSCustomObject]@{
+        MaxAttempts = [Math]::Max(1, $maxRetries + 1)
+        DelayMs = [Math]::Max(0, $retryDelayMs)
+        BackoffMultiplier = [Math]::Max(1.0, $backoff)
+    }
+}
+
+function Invoke-JobCrawlerRetry {
+    param(
+        [scriptblock]$Operation,
+        [string]$Description = "HTTP request"
+    )
+
+    $policy = Get-JobCrawlerHttpRetryPolicy
+    $delay = [int]$policy.DelayMs
+    for ($attempt = 1; $attempt -le [int]$policy.MaxAttempts; $attempt++) {
+        try {
+            return & $Operation
+        }
+        catch {
+            if ($attempt -ge [int]$policy.MaxAttempts) {
+                throw
+            }
+
+            Write-RunStatus ("{0} failed on attempt {1}/{2}: {3}. Retrying..." -f $Description, $attempt, $policy.MaxAttempts, $_.Exception.Message) "WARN"
+            if ($delay -gt 0) {
+                Start-Sleep -Milliseconds $delay
+                $delay = [int]([double]$delay * [double]$policy.BackoffMultiplier)
+            }
+        }
+    }
+}
+
+function Invoke-JobCrawlerCachePrune {
+    param(
+        [string]$Path = $CacheDirectory,
+        [bool]$Enabled = $true
+    )
+
+    if (-not $Enabled -or [string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+        return [PSCustomObject]@{ RemovedFiles = 0; RemovedBytes = 0; RemainingBytes = 0 }
+    }
+
+    $maxAgeDays = [int](Get-ConfigPathValue -Object $script:JobCrawlerRuntimeConfig -Path "defaults.cache_max_age_days" -DefaultValue 30)
+    $maxMb = [double](Get-ConfigPathValue -Object $script:JobCrawlerRuntimeConfig -Path "defaults.cache_max_mb" -DefaultValue 250)
+    $removedFiles = 0
+    $removedBytes = [int64]0
+    $cutoffDate = (Get-Date).AddDays(-[Math]::Abs($maxAgeDays))
+
+    $files = @(Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction SilentlyContinue)
+    foreach ($file in @($files | Where-Object { $_.LastWriteTime -lt $cutoffDate })) {
+        $length = [int64]$file.Length
+        Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+        $removedFiles++
+        $removedBytes += $length
+    }
+
+    $files = @(Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction SilentlyContinue)
+    $totalBytes = [int64](($files | Measure-Object Length -Sum).Sum)
+    $maxBytes = [int64]($maxMb * 1MB)
+    if ($maxBytes -gt 0 -and $totalBytes -gt $maxBytes) {
+        foreach ($file in @($files | Sort-Object LastWriteTime)) {
+            if ($totalBytes -le $maxBytes) {
+                break
+            }
+            $length = [int64]$file.Length
+            Remove-Item -LiteralPath $file.FullName -Force -ErrorAction SilentlyContinue
+            $removedFiles++
+            $removedBytes += $length
+            $totalBytes -= $length
+        }
+    }
+
+    return [PSCustomObject]@{
+        RemovedFiles = $removedFiles
+        RemovedBytes = $removedBytes
+        RemainingBytes = [int64]([Math]::Max(0, $totalBytes))
+    }
+}
+
+function Invoke-ConfiguredCrawlerSource {
+    param(
+        [object]$SourceDefinition,
+        [System.Collections.Generic.List[object]]$Target
+    )
+
+    if ($null -eq $SourceDefinition -or [string]::IsNullOrWhiteSpace([string]$SourceDefinition.CrawlFunction)) {
+        return 0
+    }
+
+    $command = Get-Command ([string]$SourceDefinition.CrawlFunction) -ErrorAction SilentlyContinue
+    if ($null -eq $command) {
+        Write-RunStatus ("Source '{0}' skipped because crawl function '{1}' was not found." -f $SourceDefinition.Key, $SourceDefinition.CrawlFunction) "WARN"
+        return 0
+    }
+
+    $rows = @(& $command.Name)
+    foreach ($row in $rows) {
+        $Target.Add($row) | Out-Null
+    }
+
+    return $rows.Count
+}
+
+function Write-RunHistoryEntry {
+    param(
+        [hashtable]$Summary,
+        [string]$Path,
+        [int]$MaxEntries = 250
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+
+    $directory = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $sourceStats = @()
+    if (Get-Variable -Name SourceRunStats -Scope Script -ErrorAction SilentlyContinue) {
+        $sourceStats = @($script:SourceRunStats.ToArray())
+    }
+
+    $entry = [ordered]@{
+        run_stamp = $RunStamp
+        run_date = $RunDate
+        created_at = ([DateTimeOffset]::Now.ToString("o"))
+        crawl_mode = $CrawlMode
+        dry_run = $Summary.DryRun
+        diagnostic_mode = $Summary.DiagnosticMode
+        total_matched = $Summary.TotalMatched
+        current_count = $Summary.CurrentCount
+        tracker_count = $Summary.TrackerCount
+        duplicate_count = $Summary.DuplicateCount
+        removed_count = $Summary.RemovedCount
+        preserved_application_count = $Summary.PreservedAppliedCount
+        excluded_contract_count = $Summary.ExcludedContractCount
+        source_stats = $sourceStats
+    }
+
+    Add-Content -LiteralPath $Path -Value (($entry | ConvertTo-Json -Depth 8 -Compress)) -Encoding UTF8
+
+    if ($MaxEntries -gt 0 -and (Test-Path -LiteralPath $Path)) {
+        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8)
+        if ($lines.Count -gt $MaxEntries) {
+            $lines | Select-Object -Last $MaxEntries | Set-Content -LiteralPath $Path -Encoding UTF8
+        }
+    }
+}
+
 function ConvertTo-QueryString {
     param([hashtable]$Params)
 
@@ -515,14 +685,16 @@ function Invoke-TextRequest {
     $mergedHeaders = @{
         "User-Agent"      = $BrowserUserAgent
         "Accept"          = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        "Accept-Language" = "fr-FR,fr;q=0.9,en;q=0.8"
+        "Accept-Language" = Get-JobCrawlerAcceptLanguage
     }
 
     foreach ($key in $Headers.Keys) {
         $mergedHeaders[$key] = $Headers[$key]
     }
 
-    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -Headers $mergedHeaders -TimeoutSec $TimeoutSec
+    $response = Invoke-JobCrawlerRetry -Description $Url -Operation {
+        Invoke-WebRequest -Uri $Url -UseBasicParsing -Headers $mergedHeaders -TimeoutSec $TimeoutSec
+    }
     return [string]$response.Content
 }
 
@@ -558,7 +730,7 @@ function Invoke-JsonPostRequest {
     $mergedHeaders = @{
         "User-Agent"      = $BrowserUserAgent
         "Accept"          = "application/json, text/plain, */*"
-        "Accept-Language" = "fr-FR,fr;q=0.9,en;q=0.8"
+        "Accept-Language" = Get-JobCrawlerAcceptLanguage
         "Content-Type"    = "application/json"
     }
 
@@ -571,7 +743,9 @@ function Invoke-JsonPostRequest {
         $jsonBody = $Body | ConvertTo-Json -Depth 12 -Compress
     }
 
-    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -Method Post -Headers $mergedHeaders -Body $jsonBody -TimeoutSec $TimeoutSec
+    $response = Invoke-JobCrawlerRetry -Description $Url -Operation {
+        Invoke-WebRequest -Uri $Url -UseBasicParsing -Method Post -Headers $mergedHeaders -Body $jsonBody -TimeoutSec $TimeoutSec
+    }
     if ([string]::IsNullOrWhiteSpace([string]$response.Content)) {
         return $null
     }
@@ -582,18 +756,20 @@ function Invoke-JsonPostRequest {
 function Invoke-CurlTextRequest {
     param([string]$Url)
 
-    $curl = Get-Command "curl.exe" -ErrorAction Stop
-    $lines = & $curl.Source -L -s --compressed $Url `
-        -H "User-Agent: $BrowserUserAgent" `
-        -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" `
-        -H "Accept-Language: fr-FR,fr;q=0.9,en;q=0.8" `
-        -H "Connection: keep-alive"
+    return Invoke-JobCrawlerRetry -Description $Url -Operation {
+        $curl = Get-Command "curl.exe" -ErrorAction Stop
+        $lines = & $curl.Source -L -s --compressed $Url `
+            -H "User-Agent: $BrowserUserAgent" `
+            -H "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" `
+            -H ("Accept-Language: {0}" -f (Get-JobCrawlerAcceptLanguage)) `
+            -H "Connection: keep-alive"
 
-    if ($LASTEXITCODE -ne 0) {
-        throw "curl.exe failed for $Url with exit code $LASTEXITCODE"
+        if ($LASTEXITCODE -ne 0) {
+            throw "curl.exe failed for $Url with exit code $LASTEXITCODE"
+        }
+
+        return ($lines -join "`n")
     }
-
-    return ($lines -join "`n")
 }
 
 function Get-MetaContent {

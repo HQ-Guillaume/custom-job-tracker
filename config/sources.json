@@ -11,38 +11,67 @@
   "sources": {
     "apec": {
       "label": "APEC",
+      "short_label": "APEC",
       "enabled_by_default": true,
-      "requires_credentials": false
+      "requires_credentials": false,
+      "crawl_function": "Get-ApecJobs",
+      "skip_switch": "SkipApec",
+      "enable_switch": ""
     },
     "hellowork": {
       "label": "HelloWork",
+      "short_label": "HelloWork",
       "enabled_by_default": true,
-      "requires_credentials": false
+      "requires_credentials": false,
+      "crawl_function": "Get-HelloWorkJobs",
+      "skip_switch": "SkipHelloWork",
+      "enable_switch": ""
     },
     "wttj_public": {
       "label": "Welcome to the Jungle public",
+      "short_label": "WTTJ public",
       "enabled_by_default": true,
-      "requires_credentials": false
+      "requires_credentials": false,
+      "crawl_function": "Get-WttjPublicFallbackJobs",
+      "skip_switch": "DisableWttjPublicFallback",
+      "enable_switch": "",
+      "fallback_for": "welcome_kit"
     },
     "linkedin": {
       "label": "LinkedIn public guest",
+      "short_label": "LinkedIn public",
       "enabled_by_default": true,
-      "requires_credentials": false
+      "requires_credentials": false,
+      "crawl_function": "Get-LinkedInJobs",
+      "skip_switch": "SkipLinkedIn",
+      "enable_switch": ""
     },
     "france_travail": {
       "label": "France Travail API",
+      "short_label": "France Travail",
       "enabled_by_default": false,
-      "requires_credentials": true
+      "requires_credentials": true,
+      "crawl_function": "Get-FranceTravailJobs",
+      "skip_switch": "SkipFranceTravail",
+      "enable_switch": "EnableFranceTravail"
     },
     "adzuna": {
       "label": "Adzuna API",
+      "short_label": "Adzuna",
       "enabled_by_default": false,
-      "requires_credentials": true
+      "requires_credentials": true,
+      "crawl_function": "Get-AdzunaJobs",
+      "skip_switch": "SkipAdzuna",
+      "enable_switch": "EnableAdzuna"
     },
     "welcome_kit": {
       "label": "WelcomeKit API",
+      "short_label": "WelcomeKit",
       "enabled_by_default": false,
-      "requires_credentials": true
+      "requires_credentials": true,
+      "crawl_function": "Get-WelcomeKitJobs",
+      "skip_switch": "DisableWelcomeKit",
+      "enable_switch": "EnableWelcomeKit"
     }
   },
   "public_default_sources": [

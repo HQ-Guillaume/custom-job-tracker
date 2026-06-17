@@ -6,14 +6,22 @@
     "tracker_path": "output\\jobs_tracker.xlsx",
     "cache_directory": "output\\cache",
     "cache_ttl_hours": 24,
+    "cache_prune_enabled": true,
+    "cache_max_age_days": 30,
+    "cache_max_mb": 250,
     "max_backups": 5
   },
   "output": {
-    "diagnostics_directory": "output\\diagnostics"
+    "diagnostics_directory": "output\\diagnostics",
+    "run_history_path": "output\\run_history.jsonl",
+    "run_history_max_entries": 250
   },
   "http": {
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "accept_language": "fr-FR,fr;q=0.9,en;q=0.8"
+    "accept_language": "fr-FR,fr;q=0.9,en;q=0.8",
+    "max_retries": 2,
+    "retry_delay_ms": 1200,
+    "retry_backoff_multiplier": 2.0
   },
   "delays_ms": {
     "linkedin_detail": 1200,

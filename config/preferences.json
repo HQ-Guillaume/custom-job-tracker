@@ -51,6 +51,7 @@
   ],
   "foreign_location_patterns": [
     "london",
+    "\\buk\\b",
     "madrid",
     "barcelona",
     "casablanca",
@@ -59,10 +60,27 @@
     "belgium",
     "luxembourg",
     "switzerland",
+    "geneva",
+    "lausanne",
+    "zurich",
     "cyprus",
     "canada",
     "morocco",
     "spain",
-    "united\\s+kingdom"
+    "united\\s+kingdom",
+    "new\\s*york",
+    "united\\s*states",
+    "\\bus\\b",
+    "u\\.?s\\.?a\\.?",
+    "berlin",
+    "germany",
+    "amsterdam",
+    "netherlands",
+    "dublin",
+    "ireland",
+    "milan",
+    "italy",
+    "singapore",
+    "hong\\s*kong"
   ]
 }

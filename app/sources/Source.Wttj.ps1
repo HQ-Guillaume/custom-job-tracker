@@ -14,22 +14,194 @@ function Get-WttjLocationFromUrl {
     catch {
     }
 
-    $locationMatch = [regex]::Match($path, "/jobs/[^/?#]*_(?<location>[^/_?#]+)$", [Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    if (-not $locationMatch.Success) {
+    $slugMatch = [regex]::Match($path, "/jobs/(?<slug>[^/?#]+)", [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $slugMatch.Success) {
         return ""
     }
 
-    $locationSlug = $locationMatch.Groups["location"].Value
-    if ($locationSlug -match "^(h|f|m|x|nb|stage|internship|cdi|cdd)$") {
+    $slugParts = @(([string]$slugMatch.Groups["slug"].Value) -split "_")
+    if ($slugParts.Count -lt 2) {
         return ""
     }
 
-    $location = ConvertFrom-SlugToTitle $locationSlug
-    if (Test-IsJunkLocationText $location) {
+    foreach ($locationSlug in @($slugParts | Select-Object -Skip 1)) {
+        if ([string]::IsNullOrWhiteSpace($locationSlug)) {
+            continue
+        }
+        if ($locationSlug -match "^(h|f|m|x|nb|stage|internship|cdi|cdd)$") {
+            continue
+        }
+        if ($locationSlug -cmatch "^[A-Z0-9]{3,12}$") {
+            continue
+        }
+
+        $location = ConvertFrom-SlugToTitle $locationSlug
+        if (-not (Test-IsJunkLocationText $location)) {
+            return $location
+        }
+    }
+
+    return ""
+}
+
+function ConvertFrom-WttjJsonStringValue {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
         return ""
     }
 
-    return $location
+    try {
+        return Repair-DisplayText ([string](('"{0}"' -f ($Value -replace '"', '\"')) | ConvertFrom-Json))
+    }
+    catch {
+        return Repair-DisplayText $Value
+    }
+}
+
+function Get-WttjInitialDataJsonText {
+    param([AllowNull()][string]$Html)
+
+    if ([string]::IsNullOrWhiteSpace($Html)) {
+        return ""
+    }
+
+    $match = [regex]::Match($Html, '(?s)window\.__INITIAL_DATA__\s*=\s*"(?<data>(?:\\.|[^"\\])*)"\s*;')
+    if (-not $match.Success) {
+        return $Html
+    }
+
+    try {
+        return [string](('"{0}"' -f $match.Groups["data"].Value) | ConvertFrom-Json)
+    }
+    catch {
+        return $Html
+    }
+}
+
+function Get-WttjJsonStringField {
+    param(
+        [AllowNull()][string]$Text,
+        [string]$Name
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Text) -or [string]::IsNullOrWhiteSpace($Name)) {
+        return ""
+    }
+
+    $pattern = '(?s)(?:"|\\")' + [regex]::Escape($Name) + '(?:"|\\")\s*:\s*(?:"|\\")(?<value>.*?)(?:"|\\")'
+    $match = [regex]::Match($Text, $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) {
+        return ""
+    }
+
+    return ConvertFrom-WttjJsonStringValue $match.Groups["value"].Value
+}
+
+function ConvertTo-WttjCountryLabel {
+    param([AllowNull()][string]$CountryCode)
+
+    $code = (ConvertTo-MatchText $CountryCode).ToUpperInvariant()
+    switch ($code) {
+        "FR" { return "France" }
+        "GB" { return "United Kingdom" }
+        "UK" { return "United Kingdom" }
+        "US" { return "United States" }
+        "MA" { return "Morocco" }
+        "ES" { return "Spain" }
+        "CA" { return "Canada" }
+        "BE" { return "Belgium" }
+        "CH" { return "Switzerland" }
+        "DE" { return "Germany" }
+        "NL" { return "Netherlands" }
+        "IE" { return "Ireland" }
+        "LU" { return "Luxembourg" }
+        default { return $CountryCode }
+    }
+}
+
+function Get-WttjLocationFromInitialData {
+    param([AllowNull()][string]$Html)
+
+    $jsonText = Get-WttjInitialDataJsonText $Html
+    if ([string]::IsNullOrWhiteSpace($jsonText)) {
+        return ""
+    }
+
+    $officesMatch = [regex]::Match($jsonText, '(?s)(?:"|\\")offices(?:"|\\")\s*:\s*\[(?<offices>.*?)\]', [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $officesMatch.Success) {
+        return ""
+    }
+
+    $locations = New-Object System.Collections.Generic.List[string]
+    foreach ($officeMatch in [regex]::Matches($officesMatch.Groups["offices"].Value, '(?s)\{(?<office>.*?)\}')) {
+        $officeText = $officeMatch.Groups["office"].Value
+        $city = Get-WttjJsonStringField -Text $officeText -Name "city"
+        if ([string]::IsNullOrWhiteSpace($city)) {
+            $city = Get-WttjJsonStringField -Text $officeText -Name "local_city"
+        }
+
+        $countryCode = Get-WttjJsonStringField -Text $officeText -Name "country_code"
+        $country = ConvertTo-WttjCountryLabel $countryCode
+        if ([string]::IsNullOrWhiteSpace($country)) {
+            $country = Get-WttjJsonStringField -Text $officeText -Name "country"
+        }
+
+        $location = Join-CleanTextParts @($city, $country)
+        if (-not [string]::IsNullOrWhiteSpace($location) -and -not $locations.Contains($location)) {
+            $locations.Add($location) | Out-Null
+        }
+    }
+
+    return Join-CleanTextParts ($locations.ToArray() | Select-Object -First 3)
+}
+
+function Test-IsWttjFranceTarget {
+    $target = ConvertTo-MatchText $Location
+    return ([string]::IsNullOrWhiteSpace($target) -or $target -match "france|paris|ile\s*de\s*france")
+}
+
+function Test-IsWttjKnownForeignLocation {
+    param([AllowNull()][string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $false
+    }
+
+    $foreignPatterns = Get-JobCrawlerPreferenceArray -Preferences $script:JobCrawlerPreferences -Name "foreign_location_patterns"
+    return (Test-AnyPatternMatch -Text (ConvertTo-MatchText $Text) -Patterns $foreignPatterns)
+}
+
+function Test-IsWttjLocationAllowed {
+    param(
+        [AllowNull()][string]$JobLocation,
+        [AllowNull()][string]$Url,
+        [AllowNull()][string]$Text = ""
+    )
+
+    if (-not (Test-IsWttjFranceTarget)) {
+        return $true
+    }
+
+    $urlLocation = Get-WttjLocationFromUrl $Url
+    if (Test-IsWttjKnownForeignLocation $urlLocation) {
+        return $false
+    }
+
+    if ([string]::IsNullOrWhiteSpace($JobLocation)) {
+        return $false
+    }
+
+    if (Test-IsWttjKnownForeignLocation $JobLocation) {
+        return $false
+    }
+
+    $category = Get-LocationFitCategory -Location $JobLocation -Preferences $script:JobCrawlerPreferences
+    if ($category -eq "foreign") {
+        return $false
+    }
+
+    return $true
 }
 
 function Get-WttjLocation {
@@ -40,6 +212,11 @@ function Get-WttjLocation {
     )
 
     $location = Get-LocationFromStructuredHtml $Html
+    if (-not [string]::IsNullOrWhiteSpace($location)) {
+        return $location
+    }
+
+    $location = Get-WttjLocationFromInitialData $Html
     if (-not [string]::IsNullOrWhiteSpace($location)) {
         return $location
     }
@@ -81,6 +258,10 @@ function Get-WttjCompanyNameFromUrl {
 
 function Get-WttjCandidateScore {
     param([string]$Url)
+
+    if ((Test-IsWttjFranceTarget) -and (Test-IsWttjKnownForeignLocation (Get-WttjLocationFromUrl $Url))) {
+        return -1000
+    }
 
     $score = 0
     if ($Url -match "(?i)(web[-_\s]*analyst|digital[-_\s]*analyst|web[-_\s]*analytics|digital[-_\s]*analytics|tracking|taggage|tagging|(^|[-_\s])ga4($|[-_\s])|(^|[-_\s])gtm($|[-_\s])|google[-_\s]*(analytics|tag[-_\s]*manager)|piano|contentsquare|content[-_\s]*square|(^|[-_\s])cro($|[-_\s]))") {
@@ -244,6 +425,11 @@ function Get-WelcomeKitJobs {
 
             $companyName = Get-WelcomeKitCompanyName -Job $job -JobUrl $jobUrl
             $jobLocation = Get-WelcomeKitLocation -Job $job -JobUrl $jobUrl
+            if (-not (Test-IsWttjLocationAllowed -JobLocation $jobLocation -Url $jobUrl -Text $combined)) {
+                Add-SourceMetric -Stats $stats -Name "SkippedNoMatch"
+                continue
+            }
+
             $result = New-JobResult -Title ([string]$job.name) -CompanyName $companyName -JobLocation $jobLocation -ContractType $contractType -MatchScore $match.Score -MatchLevel $match.Level -MatchedKeywords $match.Keywords -Url $jobUrl -Platform "Welcome to the Jungle" -PublishedAt $publishedAt -SourceText $combined
             if ($null -ne $result) {
                 $results.Add($result) | Out-Null
@@ -335,6 +521,11 @@ function Get-WttjPublicFallbackJobs {
                 continue
             }
 
+            if ((Test-IsWttjFranceTarget) -and (Test-IsWttjKnownForeignLocation (Get-WttjLocationFromUrl $loc))) {
+                Add-SourceMetric -Stats $stats -Name "SkippedNoMatch"
+                continue
+            }
+
             $candidateSeen[$loc] = $true
             $candidates.Add([PSCustomObject]@{
                 Url       = $loc
@@ -377,6 +568,11 @@ function Get-WttjPublicFallbackJobs {
             Add-SourceMetric -Stats $stats -Name "Errors"
             if ($urlOnlyMatch) {
                 $jobLocation = Get-WttjLocation -Html "" -Url $candidate.Url -Title $candidate.SlugTitle
+                if (-not (Test-IsWttjLocationAllowed -JobLocation $jobLocation -Url $candidate.Url -Text $urlText)) {
+                    Add-SourceMetric -Stats $stats -Name "SkippedNoMatch"
+                    continue
+                }
+
                 $fallbackResult = New-JobResult -Title $candidate.SlugTitle -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $urlText) -MatchScore $urlMatchResult.Score -MatchLevel $urlMatchResult.Level -MatchedKeywords $urlMatchResult.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $candidate.LastMod -SourceText $urlText
                 if ($null -ne $fallbackResult) {
                     $results.Add($fallbackResult) | Out-Null
@@ -389,6 +585,11 @@ function Get-WttjPublicFallbackJobs {
         if ($html -match "(?i)<title>ERROR: The request could not be satisfied</title>|AwsWafIntegration|challenge-container") {
             if ($urlOnlyMatch) {
                 $jobLocation = Get-WttjLocation -Html $html -Url $candidate.Url -Title $candidate.SlugTitle
+                if (-not (Test-IsWttjLocationAllowed -JobLocation $jobLocation -Url $candidate.Url -Text $urlText)) {
+                    Add-SourceMetric -Stats $stats -Name "SkippedNoMatch"
+                    continue
+                }
+
                 $fallbackResult = New-JobResult -Title $candidate.SlugTitle -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $urlText) -MatchScore $urlMatchResult.Score -MatchLevel $urlMatchResult.Level -MatchedKeywords $urlMatchResult.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $candidate.LastMod -SourceText $urlText
                 if ($null -ne $fallbackResult) {
                     $results.Add($fallbackResult) | Out-Null
@@ -429,6 +630,11 @@ function Get-WttjPublicFallbackJobs {
         }
 
         $jobLocation = Get-WttjLocation -Html $html -Url $candidate.Url -Title $title
+        if (-not (Test-IsWttjLocationAllowed -JobLocation $jobLocation -Url $candidate.Url -Text $combined)) {
+            Add-SourceMetric -Stats $stats -Name "SkippedNoMatch"
+            continue
+        }
+
         $result = New-JobResult -Title $title -CompanyName (Get-WttjCompanyNameFromUrl $candidate.Url) -JobLocation $jobLocation -ContractType (Get-ContractTypeFromText -Text $combined) -MatchScore $match.Score -MatchLevel $match.Level -MatchedKeywords $match.Keywords -Url $candidate.Url -Platform "Welcome to the Jungle" -PublishedAt $publishedAt -SourceText $combined
         if ($null -ne $result) {
             $results.Add($result) | Out-Null

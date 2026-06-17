@@ -378,6 +378,7 @@ function New-DefaultJobCrawlerPreferences {
         )
         foreign_location_patterns = @(
             "london",
+            "\buk\b",
             "madrid",
             "barcelona",
             "casablanca",
@@ -386,11 +387,28 @@ function New-DefaultJobCrawlerPreferences {
             "belgium",
             "luxembourg",
             "switzerland",
+            "geneva",
+            "lausanne",
+            "zurich",
             "cyprus",
             "canada",
             "morocco",
             "spain",
-            "united\s+kingdom"
+            "united\s+kingdom",
+            "new\s*york",
+            "united\s*states",
+            "\bus\b",
+            "u\.?s\.?a\.?",
+            "berlin",
+            "germany",
+            "amsterdam",
+            "netherlands",
+            "dublin",
+            "ireland",
+            "milan",
+            "italy",
+            "singapore",
+            "hong\s*kong"
         )
     }
 }
@@ -460,6 +478,20 @@ function Get-PreferenceArray {
     }
 
     return @($rawValue)
+}
+
+function Get-JobCrawlerPreferenceArray {
+    param(
+        [AllowNull()]$Preferences,
+        [string]$Name
+    )
+
+    if ($null -eq $Preferences) {
+        $Preferences = New-DefaultJobCrawlerPreferences
+    }
+    $defaults = New-DefaultJobCrawlerPreferences
+    $defaultValue = Get-PreferenceArray -Preferences $defaults -Name $Name -DefaultValue @()
+    return Get-PreferenceArray -Preferences $Preferences -Name $Name -DefaultValue $defaultValue
 }
 
 function Test-AnyPatternMatch {
@@ -542,8 +574,8 @@ function Get-LocationFitCategory {
         return "unknown"
     }
 
-    $targetPatterns = Get-PreferenceArray -Preferences $Preferences -Name "target_location_patterns" -DefaultValue @("paris", "ile\s*de\s*france", "france", "remote", "teletravail")
-    $foreignPatterns = Get-PreferenceArray -Preferences $Preferences -Name "foreign_location_patterns" -DefaultValue @("london", "madrid", "casablanca", "montreal", "belgium", "spain", "canada", "morocco")
+    $targetPatterns = Get-JobCrawlerPreferenceArray -Preferences $Preferences -Name "target_location_patterns"
+    $foreignPatterns = Get-JobCrawlerPreferenceArray -Preferences $Preferences -Name "foreign_location_patterns"
 
     if (Test-AnyPatternMatch -Text $locationText -Patterns $targetPatterns) {
         return "target"

@@ -284,6 +284,68 @@ function Get-JobCrawlerSourceLabel {
     return [string](Get-ConfigPathValue -Object $SourcesConfig -Path ("sources.{0}.label" -f $SourceKey) -DefaultValue $DefaultValue)
 }
 
+function Get-JobCrawlerSourceDefinitions {
+    param([AllowNull()]$SourcesConfig)
+
+    $defaultSourceOrder = @("apec", "hellowork", "wttj_public", "linkedin", "france_travail", "adzuna", "welcome_kit")
+    $sourceOrder = @(Get-ConfigStringArray (Get-ConfigPathValue -Object $SourcesConfig -Path "source_order" -DefaultValue $defaultSourceOrder))
+    if ($sourceOrder.Count -eq 0) {
+        $sourceOrder = $defaultSourceOrder
+    }
+
+    $defaults = @{
+        apec = @{
+            Label = "APEC"; Enabled = $true; Credentials = $false; Function = "Get-ApecJobs"; Skip = "SkipApec"; Enable = ""; FallbackFor = ""
+        }
+        hellowork = @{
+            Label = "HelloWork"; Enabled = $true; Credentials = $false; Function = "Get-HelloWorkJobs"; Skip = "SkipHelloWork"; Enable = ""; FallbackFor = ""
+        }
+        wttj_public = @{
+            Label = "Welcome to the Jungle public"; Enabled = $true; Credentials = $false; Function = "Get-WttjPublicFallbackJobs"; Skip = "DisableWttjPublicFallback"; Enable = ""; FallbackFor = "welcome_kit"
+        }
+        linkedin = @{
+            Label = "LinkedIn public guest"; Enabled = $true; Credentials = $false; Function = "Get-LinkedInJobs"; Skip = "SkipLinkedIn"; Enable = ""; FallbackFor = ""
+        }
+        france_travail = @{
+            Label = "France Travail API"; Enabled = $false; Credentials = $true; Function = "Get-FranceTravailJobs"; Skip = "SkipFranceTravail"; Enable = "EnableFranceTravail"; FallbackFor = ""
+        }
+        adzuna = @{
+            Label = "Adzuna API"; Enabled = $false; Credentials = $true; Function = "Get-AdzunaJobs"; Skip = "SkipAdzuna"; Enable = "EnableAdzuna"; FallbackFor = ""
+        }
+        welcome_kit = @{
+            Label = "WelcomeKit API"; Enabled = $false; Credentials = $true; Function = "Get-WelcomeKitJobs"; Skip = "DisableWelcomeKit"; Enable = "EnableWelcomeKit"; FallbackFor = ""
+        }
+    }
+
+    $definitions = New-Object System.Collections.Generic.List[object]
+    foreach ($sourceKey in $sourceOrder) {
+        if ([string]::IsNullOrWhiteSpace($sourceKey)) {
+            continue
+        }
+
+        $key = [string]$sourceKey
+        $fallback = $defaults[$key]
+        if ($null -eq $fallback) {
+            $fallback = @{ Label = $key; Enabled = $true; Credentials = $false; Function = ""; Skip = ""; Enable = ""; FallbackFor = "" }
+        }
+
+        $definition = [PSCustomObject]@{
+            Key                = $key
+            Label              = [string](Get-ConfigPathValue -Object $SourcesConfig -Path ("sources.{0}.label" -f $key) -DefaultValue $fallback.Label)
+            ShortLabel         = [string](Get-ConfigPathValue -Object $SourcesConfig -Path ("sources.{0}.short_label" -f $key) -DefaultValue $fallback.Label)
+            EnabledByDefault   = Test-JobCrawlerSourceEnabledByDefault -SourcesConfig $SourcesConfig -SourceKey $key -DefaultValue ([bool]$fallback.Enabled)
+            RequiresCredential = ConvertTo-ConfigBoolean -Value (Get-ConfigPathValue -Object $SourcesConfig -Path ("sources.{0}.requires_credentials" -f $key) -DefaultValue $fallback.Credentials) -DefaultValue ([bool]$fallback.Credentials)
+            CrawlFunction      = [string](Get-ConfigPathValue -Object $SourcesConfig -Path ("sources.{0}.crawl_function" -f $key) -DefaultValue $fallback.Function)
+            SkipSwitch         = [string](Get-ConfigPathValue -Object $SourcesConfig -Path ("sources.{0}.skip_switch" -f $key) -DefaultValue $fallback.Skip)
+            EnableSwitch       = [string](Get-ConfigPathValue -Object $SourcesConfig -Path ("sources.{0}.enable_switch" -f $key) -DefaultValue $fallback.Enable)
+            FallbackFor        = [string](Get-ConfigPathValue -Object $SourcesConfig -Path ("sources.{0}.fallback_for" -f $key) -DefaultValue $fallback.FallbackFor)
+        }
+        $definitions.Add($definition) | Out-Null
+    }
+
+    return @($definitions.ToArray())
+}
+
 function Get-JobCrawlerCredentialValue {
     param(
         [AllowNull()]$SourcesConfig,
@@ -384,6 +446,15 @@ function Test-JobCrawlerConfig {
         $sourceConfig = Get-ConfigPathValue -Object $Config.Sources -Path ("sources.{0}" -f $sourceKey) -DefaultValue $null
         if ($null -eq $sourceConfig) {
             $issues.Add("Missing sources.$sourceKey metadata") | Out-Null
+        }
+    }
+
+    foreach ($source in @(Get-JobCrawlerSourceDefinitions -SourcesConfig $Config.Sources)) {
+        if ([string]::IsNullOrWhiteSpace([string]$source.CrawlFunction)) {
+            $issues.Add("Missing crawl function for source '$($source.Key)'") | Out-Null
+        }
+        if ([string]::IsNullOrWhiteSpace([string]$source.Label)) {
+            $issues.Add("Missing label for source '$($source.Key)'") | Out-Null
         }
     }
 
