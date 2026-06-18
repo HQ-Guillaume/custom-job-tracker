@@ -2,11 +2,11 @@
 setlocal
 cd /d "%~dp0"
 
-title Job Crawler GUI
-echo Starting Job Crawler GUI...
+title Custom Job Tracker GUI
+echo Starting Custom Job Tracker GUI...
 echo.
 echo This fallback window stays attached to the GUI so startup errors remain visible.
-echo Use Run-AnalyticsJobCrawler-GUI.vbs when you want the no-console launcher.
+echo Use Run-CustomJobTracker-GUI.vbs when you want the no-console launcher.
 echo.
 
 powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "%~dp0app\cli\Launch-AnalyticsJobCrawlerGui.ps1"

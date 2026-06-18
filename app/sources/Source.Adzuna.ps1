@@ -51,7 +51,7 @@ function Get-AdzunaJobs {
         return @()
     }
 
-    Set-RunWindowTitle "Job Crawler - Adzuna"
+    Set-RunWindowTitle "Custom Job Tracker - Adzuna"
     Write-RunStatus "Collecting Adzuna jobs through the official API..."
     Write-RunStatus ("Adzuna plan: {0} query/queries, up to {1} page(s) each." -f $AdzunaQueries.Count, $MaxAdzunaPages)
     $stats = Start-SourceStats "Adzuna"

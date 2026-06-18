@@ -291,7 +291,11 @@ function Invoke-JobCrawlerCachePrune {
     }
 
     $files = @(Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction SilentlyContinue)
-    $totalBytes = [int64](($files | Measure-Object Length -Sum).Sum)
+    $measurement = $files | Measure-Object Length -Sum
+    $totalBytes = [int64]0
+    if ($null -ne $measurement -and $null -ne $measurement.Sum) {
+        $totalBytes = [int64]$measurement.Sum
+    }
     $maxBytes = [int64]($maxMb * 1MB)
     if ($maxBytes -gt 0 -and $totalBytes -gt $maxBytes) {
         foreach ($file in @($files | Sort-Object LastWriteTime)) {
@@ -311,30 +315,6 @@ function Invoke-JobCrawlerCachePrune {
         RemovedBytes = $removedBytes
         RemainingBytes = [int64]([Math]::Max(0, $totalBytes))
     }
-}
-
-function Invoke-ConfiguredCrawlerSource {
-    param(
-        [object]$SourceDefinition,
-        [System.Collections.Generic.List[object]]$Target
-    )
-
-    if ($null -eq $SourceDefinition -or [string]::IsNullOrWhiteSpace([string]$SourceDefinition.CrawlFunction)) {
-        return 0
-    }
-
-    $command = Get-Command ([string]$SourceDefinition.CrawlFunction) -ErrorAction SilentlyContinue
-    if ($null -eq $command) {
-        Write-RunStatus ("Source '{0}' skipped because crawl function '{1}' was not found." -f $SourceDefinition.Key, $SourceDefinition.CrawlFunction) "WARN"
-        return 0
-    }
-
-    $rows = @(& $command.Name)
-    foreach ($row in $rows) {
-        $Target.Add($row) | Out-Null
-    }
-
-    return $rows.Count
 }
 
 function Write-RunHistoryEntry {

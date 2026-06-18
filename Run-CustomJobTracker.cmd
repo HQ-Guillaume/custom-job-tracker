@@ -2,9 +2,9 @@
 setlocal
 cd /d "%~dp0"
 
-title Job Crawler - Starting
+title Custom Job Tracker - Starting
 cls
-echo Job Crawler
+echo Custom Job Tracker
 echo Started: %DATE% %TIME%
 echo.
 echo The window title and timestamped lines show the current stage.
@@ -34,10 +34,10 @@ set "CRAWLER_EXIT_CODE=%ERRORLEVEL%"
 
 echo.
 if "%CRAWLER_EXIT_CODE%"=="0" (
-    title Job Crawler - Finished
+    title Custom Job Tracker - Finished
     echo Finished successfully.
 ) else (
-    title Job Crawler - Error
+    title Custom Job Tracker - Error
     echo Finished with error code %CRAWLER_EXIT_CODE%.
 )
 echo Tracker workbook and backups are in:

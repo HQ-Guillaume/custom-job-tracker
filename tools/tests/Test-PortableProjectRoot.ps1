@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $tempBase = [System.IO.Path]::GetTempPath()
-$tempRoot = Join-Path $tempBase ("job-crawler-portable-{0}" -f ([guid]::NewGuid().ToString("N")))
+$tempRoot = Join-Path $tempBase ("custom-job-tracker-portable-{0}" -f ([guid]::NewGuid().ToString("N")))
 
 function Get-TestPowerShellExecutable {
     $pwsh = Get-Command pwsh -ErrorAction SilentlyContinue

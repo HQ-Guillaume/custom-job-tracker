@@ -124,7 +124,7 @@ function Get-FranceTravailJobs {
         return @()
     }
 
-    Set-RunWindowTitle "Job Crawler - France Travail"
+    Set-RunWindowTitle "Custom Job Tracker - France Travail"
     Write-RunStatus "Collecting France Travail jobs through the official API..."
     Write-RunStatus ("France Travail plan: {0} query/queries, up to {1} page(s) each." -f $FranceTravailQueries.Count, $MaxFranceTravailPages)
     $stats = Start-SourceStats "France Travail"

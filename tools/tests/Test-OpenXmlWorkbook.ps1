@@ -89,7 +89,7 @@ $row = New-OrderedJobRecord @{
     days_since_last_seen  = "0"
 }
 
-$tempPath = Join-Path ([IO.Path]::GetTempPath()) ("job-crawler-openxml-test-{0}.xlsx" -f ([Guid]::NewGuid().ToString("N")))
+$tempPath = Join-Path ([IO.Path]::GetTempPath()) ("custom-job-tracker-openxml-test-{0}.xlsx" -f ([Guid]::NewGuid().ToString("N")))
 try {
     Export-TrackerWorkbook -Rows @($row) -Path $tempPath -Summary @{
         Profile               = "Digital Analytics (digital_analytics)"

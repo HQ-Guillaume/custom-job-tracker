@@ -46,26 +46,50 @@ function Test-IsGenericJobBoardName {
     return $text -match "\b(france travail|pole emploi|poles emploi|adzuna|linkedin|indeed|hellowork|hello work|meteojob|jobijoba|monster|apec|jobgether|talent com|confidential|confidentiel|licorne|recrutement)\b"
 }
 
-function Get-DedupeCompanyKey {
-    param([AllowNull()][string]$CompanyName)
-
-    if (Test-IsGenericJobBoardName $CompanyName) {
-        return ""
-    }
-
-    $tokens = @(Split-NormalizedTokens $CompanyName)
-    if ($tokens.Count -eq 0) {
-        return ""
-    }
-
-    $noise = @(
+function Get-DedupeCompanyNoiseTokens {
+    return @(
         "the", "and", "et", "de", "du", "des", "la", "le", "les",
         "sa", "sas", "sasu", "ltd", "limited", "inc", "plc", "fr", "france",
         "group", "groupe", "company", "companies", "media", "digital",
         "consulting", "consultants", "technology", "technologies", "solutions"
     )
-    $weakCompanyTokens = @("confidential", "confidentiel", "jobgether", "licorne", "recrutement", "talent", "emploi", "travail", "adzuna", "linkedin", "indeed", "hellowork", "meteojob", "jobijoba", "monster", "apec")
-    $strongTokens = @($tokens | Where-Object { $_.Length -gt 1 -and $noise -notcontains $_ -and $weakCompanyTokens -notcontains $_ })
+}
+
+function Get-DedupeWeakCompanyTokens {
+    return @("confidential", "confidentiel", "jobgether", "licorne", "recrutement", "talent", "emploi", "travail", "adzuna", "linkedin", "indeed", "hellowork", "meteojob", "jobijoba", "monster", "apec")
+}
+
+function Get-DedupeCompanyDescriptorTokens {
+    return @(
+        "assurance", "assurances", "insurance", "mutuelle", "bank", "banque",
+        "consulting", "consultants", "consultant", "conseil", "agency", "agence",
+        "esn", "ssii", "recrutement", "media", "digital", "technology", "technologies",
+        "tech", "solutions", "services", "service", "group", "groupe", "company", "companies",
+        "france", "international", "global", "partners", "partner"
+    )
+}
+
+function Get-DedupeCompanyStrongTokens {
+    param([AllowNull()][string]$CompanyName)
+
+    if (Test-IsGenericJobBoardName $CompanyName) {
+        return @()
+    }
+
+    $tokens = @(Split-NormalizedTokens $CompanyName)
+    if ($tokens.Count -eq 0) {
+        return @()
+    }
+
+    $noise = @(Get-DedupeCompanyNoiseTokens)
+    $weakCompanyTokens = @(Get-DedupeWeakCompanyTokens)
+    return @($tokens | Where-Object { $_.Length -gt 1 -and $noise -notcontains $_ -and $weakCompanyTokens -notcontains $_ })
+}
+
+function Get-DedupeCompanyKey {
+    param([AllowNull()][string]$CompanyName)
+
+    $strongTokens = @(Get-DedupeCompanyStrongTokens $CompanyName)
     if ($strongTokens.Count -eq 0) {
         return ""
     }
@@ -75,6 +99,64 @@ function Get-DedupeCompanyKey {
     }
 
     return ($strongTokens | Select-Object -First 2) -join " "
+}
+
+function Get-ConfiguredCompanyAliasCanonicalKey {
+    param([AllowNull()][string]$CompanyName)
+
+    if ([string]::IsNullOrWhiteSpace($CompanyName) -or -not (Get-Variable -Name JobCrawlerMatchingRules -Scope Script -ErrorAction SilentlyContinue)) {
+        return ""
+    }
+
+    $companyText = ConvertTo-IdentityText -Text $CompanyName
+    if ([string]::IsNullOrWhiteSpace($companyText)) {
+        return ""
+    }
+
+    foreach ($aliasGroup in @(Get-ConfigPathValue -Object $script:JobCrawlerMatchingRules -Path "deduplication.company_aliases" -DefaultValue @())) {
+        $canonical = [string](Get-ConfigProperty -Object $aliasGroup -Name "canonical" -DefaultValue "")
+        $aliases = @(Get-ConfigStringArray (Get-ConfigProperty -Object $aliasGroup -Name "aliases" -DefaultValue @()))
+        $candidateValues = @($canonical) + $aliases
+        foreach ($candidate in @($candidateValues)) {
+            $candidateText = ConvertTo-IdentityText -Text $candidate
+            if (-not [string]::IsNullOrWhiteSpace($candidateText) -and $companyText -eq $candidateText) {
+                $canonicalKey = Get-DedupeCompanyKey $canonical
+                if (-not [string]::IsNullOrWhiteSpace($canonicalKey)) {
+                    return $canonicalKey
+                }
+            }
+        }
+    }
+
+    return ""
+}
+
+function Get-DedupeCompanyAliasKeys {
+    param([AllowNull()][string]$CompanyName)
+
+    $keys = New-Object System.Collections.Generic.List[string]
+    $configuredCanonical = Get-ConfiguredCompanyAliasCanonicalKey $CompanyName
+    if (-not [string]::IsNullOrWhiteSpace($configuredCanonical)) {
+        $keys.Add($configuredCanonical) | Out-Null
+    }
+
+    $primaryKey = Get-DedupeCompanyKey $CompanyName
+    if (-not [string]::IsNullOrWhiteSpace($primaryKey)) {
+        $keys.Add($primaryKey) | Out-Null
+    }
+
+    $strongTokens = @(Get-DedupeCompanyStrongTokens $CompanyName)
+    $descriptorTokens = @(Get-DedupeCompanyDescriptorTokens)
+    if ($strongTokens.Count -gt 1) {
+        $rootToken = [string]$strongTokens[0]
+        $remainingTokens = @($strongTokens | Select-Object -Skip 1)
+        $remainingAreDescriptors = @($remainingTokens | Where-Object { $descriptorTokens -notcontains $_ }).Count -eq 0
+        if ($rootToken.Length -ge 5 -and $remainingAreDescriptors) {
+            $keys.Add($rootToken) | Out-Null
+        }
+    }
+
+    return @($keys.ToArray() | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 }
 
 function ConvertTo-DedupeTitleToken {
@@ -198,6 +280,279 @@ function Test-UseLocationInDedupeKey {
     return $true
 }
 
+function Get-CanonicalJobUrl {
+    param([AllowNull()][string]$Url)
+
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return ""
+    }
+
+    $clean = ([string]$Url).Trim().ToLowerInvariant()
+    $clean = $clean -replace "#.*$", ""
+    $clean = $clean -replace "\?.*$", ""
+    $clean = $clean -replace "/+$", ""
+    $clean = $clean -replace "^http://", "https://"
+    $clean = $clean -replace "^https://(www\.)?", "https://"
+    return $clean
+}
+
+function Get-SourceJobIdKeyFromUrl {
+    param([AllowNull()][string]$Url)
+
+    $canonicalUrl = Get-CanonicalJobUrl $Url
+    if ([string]::IsNullOrWhiteSpace($canonicalUrl)) {
+        return ""
+    }
+
+    switch -Regex ($canonicalUrl) {
+        "linkedin\.com/jobs/view/(?:[^/]*-)?(?<id>\d+)$" { return "source-id|linkedin|{0}" -f $matches.Id }
+        "linkedin\.com/jobs/view/(?<id>\d+)" { return "source-id|linkedin|{0}" -f $matches.Id }
+        "welcometothejungle\.com/.+/jobs/(?<id>[^/?#]+)$" { return "source-id|wttj|{0}" -f $matches.Id }
+        "apec\.fr/.+/detail-offre/(?<id>[^/?#]+)$" { return "source-id|apec|{0}" -f $matches.Id }
+        "hellowork\.com/.+/emplois/(?<id>[^/?#]+)\.html$" { return "source-id|hellowork|{0}" -f $matches.Id }
+        "francetravail\.fr/.+/detail/(?<id>[^/?#]+)$" { return "source-id|france-travail|{0}" -f $matches.Id }
+        "pole-emploi\.fr/.+/detail/(?<id>[^/?#]+)$" { return "source-id|france-travail|{0}" -f $matches.Id }
+        "adzuna\.fr/details/(?<id>\d+)$" { return "source-id|adzuna|{0}" -f $matches.Id }
+    }
+
+    return ""
+}
+
+function Get-DedupeTitleTokens {
+    param([AllowNull()][string]$TitleKey)
+
+    if ([string]::IsNullOrWhiteSpace($TitleKey)) {
+        return @()
+    }
+
+    return @(([string]$TitleKey) -split "\s+" | Where-Object { $_.Length -gt 1 } | Sort-Object -Unique)
+}
+
+function Get-DedupeTokenSimilarity {
+    param(
+        [string[]]$Left,
+        [string[]]$Right
+    )
+
+    $set = @{}
+    foreach ($token in @($Left)) {
+        if (-not [string]::IsNullOrWhiteSpace($token)) {
+            $set[$token] = 1
+        }
+    }
+    foreach ($token in @($Right)) {
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            continue
+        }
+        if ($set.ContainsKey($token)) {
+            $set[$token] = 3
+        }
+        else {
+            $set[$token] = 2
+        }
+    }
+
+    $union = @($set.Keys).Count
+    if ($union -eq 0) {
+        return 0
+    }
+
+    $intersection = @($set.Keys | Where-Object { $set[$_] -eq 3 }).Count
+    return [Math]::Round($intersection / $union, 3)
+}
+
+function Get-DedupeTitleSimilarity {
+    param(
+        [AllowNull()][string]$LeftTitleKey,
+        [AllowNull()][string]$RightTitleKey
+    )
+
+    return Get-DedupeTokenSimilarity -Left (Get-DedupeTitleTokens $LeftTitleKey) -Right (Get-DedupeTitleTokens $RightTitleKey)
+}
+
+function Get-DedupeRoleFamily {
+    param([AllowNull()][string]$TitleKey)
+
+    if ([string]::IsNullOrWhiteSpace($TitleKey)) {
+        return ""
+    }
+
+    if ($TitleKey -match "\b(front|frontend|javascript|react|vue|angular|developpeur|developer)\b") {
+        return "frontend_engineering"
+    }
+    if ($TitleKey -match "\b(tracking|tagging|taggage|gtm|tag)\b") {
+        return "tracking"
+    }
+    if ($TitleKey -match "\bcro\b|conversion") {
+        return "cro"
+    }
+    if ($TitleKey -match "\bproduct\b" -and $TitleKey -match "\b(analyst|analytics)\b") {
+        return "product_analytics"
+    }
+    if ($TitleKey -match "\b(web|digital)\b" -and $TitleKey -match "\b(analyst|analytics)\b") {
+        return "digital_analytics"
+    }
+    if ($TitleKey -match "\bdata\b" -and $TitleKey -match "\b(analyst|analytics)\b") {
+        return "data_analytics"
+    }
+    if ($TitleKey -match "\bseo\b|\bsea\b|traffic|performance|marketing") {
+        return "marketing_performance"
+    }
+
+    $tokens = @(Get-DedupeTitleTokens $TitleKey)
+    if ($tokens.Count -gt 0) {
+        return ($tokens | Select-Object -First ([Math]::Min(2, $tokens.Count))) -join "_"
+    }
+
+    return ""
+}
+
+function Test-DedupeLocationsCompatible {
+    param(
+        [AllowNull()][string]$LeftLocation,
+        [AllowNull()][string]$RightLocation
+    )
+
+    $leftKey = Get-DedupeLocationKey $LeftLocation
+    $rightKey = Get-DedupeLocationKey $RightLocation
+    if ($leftKey -eq $rightKey) {
+        return $true
+    }
+    if ($leftKey -in @("unknown", "france") -or $rightKey -in @("unknown", "france")) {
+        return $true
+    }
+    if ($leftKey -eq "paris_metro" -or $rightKey -eq "paris_metro") {
+        return $false
+    }
+
+    $leftTokens = @($leftKey -split "\s+" | Where-Object { $_.Length -gt 2 })
+    $rightTokens = @($rightKey -split "\s+" | Where-Object { $_.Length -gt 2 })
+    if ((Get-DedupeTokenSimilarity -Left $leftTokens -Right $rightTokens) -gt 0) {
+        return $true
+    }
+
+    $leftText = ConvertTo-MatchText $LeftLocation
+    $rightText = ConvertTo-MatchText $RightLocation
+    $locationFamilies = @(
+        @("bordeaux", "gironde", "nouvelle aquitaine"),
+        @("lyon", "rhone", "auvergne rhone alpes"),
+        @("lille", "nord", "hauts de france"),
+        @("nantes", "loire atlantique", "pays de la loire"),
+        @("toulouse", "haute garonne", "occitanie"),
+        @("marseille", "bouches du rhone", "provence alpes cote azur")
+    )
+    foreach ($family in $locationFamilies) {
+        $leftMatches = @($family | Where-Object { $leftText -match ("\b{0}\b" -f [regex]::Escape($_)) }).Count -gt 0
+        $rightMatches = @($family | Where-Object { $rightText -match ("\b{0}\b" -f [regex]::Escape($_)) }).Count -gt 0
+        if ($leftMatches -and $rightMatches) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-JobDuplicateKeysFromRow {
+    param([AllowNull()]$Row)
+
+    $keys = New-Object System.Collections.Generic.List[string]
+    $url = Get-RowValue -Row $Row -Name "job_url_raw"
+    $canonicalUrl = Get-CanonicalJobUrl $url
+    if (-not [string]::IsNullOrWhiteSpace($canonicalUrl)) {
+        $keys.Add(("hard-url|{0}" -f $canonicalUrl)) | Out-Null
+    }
+
+    $sourceIdKey = Get-SourceJobIdKeyFromUrl $url
+    if (-not [string]::IsNullOrWhiteSpace($sourceIdKey)) {
+        $keys.Add($sourceIdKey) | Out-Null
+    }
+
+    $title = Get-RowValue -Row $Row -Name "job_title"
+    $company = Get-RowValue -Row $Row -Name "company_name"
+    $location = Get-RowValue -Row $Row -Name "location"
+    $titleKey = Get-DedupeTitleKey -Title $title -CompanyName $company
+    $locationKey = Get-DedupeLocationKey $location
+    foreach ($companyKey in @(Get-DedupeCompanyAliasKeys $company)) {
+        if ([string]::IsNullOrWhiteSpace($companyKey) -or [string]::IsNullOrWhiteSpace($titleKey)) {
+            continue
+        }
+        if (Test-IsStrongDedupeTitle $titleKey) {
+            if (Test-UseLocationInDedupeKey $titleKey) {
+                $keys.Add(("strong-company-title-location|{0}|{1}|{2}" -f $companyKey, $titleKey, $locationKey)) | Out-Null
+            }
+            else {
+                $keys.Add(("strong-company-title|{0}|{1}" -f $companyKey, $titleKey)) | Out-Null
+            }
+        }
+
+        $roleFamily = Get-DedupeRoleFamily $titleKey
+        if (-not [string]::IsNullOrWhiteSpace($roleFamily) -and $roleFamily -notin @("data_analytics", "marketing_performance")) {
+            $keys.Add(("role-family-location|{0}|{1}|{2}" -f $companyKey, $roleFamily, $locationKey)) | Out-Null
+        }
+    }
+
+    return @($keys.ToArray() | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+}
+
+function Test-JobRowsAreDuplicates {
+    param(
+        [AllowNull()]$Left,
+        [AllowNull()]$Right,
+        [switch]$AllowProbable
+    )
+
+    if ($null -eq $Left -or $null -eq $Right) {
+        return $false
+    }
+
+    $leftUrl = Get-CanonicalJobUrl (Get-RowValue -Row $Left -Name "job_url_raw")
+    $rightUrl = Get-CanonicalJobUrl (Get-RowValue -Row $Right -Name "job_url_raw")
+    if (-not [string]::IsNullOrWhiteSpace($leftUrl) -and $leftUrl -eq $rightUrl) {
+        return $true
+    }
+
+    $leftSourceId = Get-SourceJobIdKeyFromUrl (Get-RowValue -Row $Left -Name "job_url_raw")
+    $rightSourceId = Get-SourceJobIdKeyFromUrl (Get-RowValue -Row $Right -Name "job_url_raw")
+    if (-not [string]::IsNullOrWhiteSpace($leftSourceId) -and $leftSourceId -eq $rightSourceId) {
+        return $true
+    }
+
+    $leftCompanies = @(Get-DedupeCompanyAliasKeys (Get-RowValue -Row $Left -Name "company_name"))
+    $rightCompanies = @(Get-DedupeCompanyAliasKeys (Get-RowValue -Row $Right -Name "company_name"))
+    $sharedCompanyKeys = @($leftCompanies | Where-Object { $rightCompanies -contains $_ })
+    if ($sharedCompanyKeys.Count -eq 0) {
+        return $false
+    }
+
+    $leftTitle = Get-DedupeTitleKey -Title (Get-RowValue -Row $Left -Name "job_title") -CompanyName (Get-RowValue -Row $Left -Name "company_name")
+    $rightTitle = Get-DedupeTitleKey -Title (Get-RowValue -Row $Right -Name "job_title") -CompanyName (Get-RowValue -Row $Right -Name "company_name")
+    if ([string]::IsNullOrWhiteSpace($leftTitle) -or [string]::IsNullOrWhiteSpace($rightTitle)) {
+        return $false
+    }
+
+    $locationsCompatible = Test-DedupeLocationsCompatible -LeftLocation (Get-RowValue -Row $Left -Name "location") -RightLocation (Get-RowValue -Row $Right -Name "location")
+    $titleSimilarity = Get-DedupeTitleSimilarity -LeftTitleKey $leftTitle -RightTitleKey $rightTitle
+    $strongTitleThreshold = [double](Get-ConfigPathValue -Object $script:JobCrawlerMatchingRules -Path "deduplication.strong_title_similarity_threshold" -DefaultValue 0.72)
+    $probableRoleThreshold = [double](Get-ConfigPathValue -Object $script:JobCrawlerMatchingRules -Path "deduplication.probable_role_similarity_threshold" -DefaultValue 0.35)
+
+    if ($titleSimilarity -ge $strongTitleThreshold -and $locationsCompatible) {
+        return $true
+    }
+
+    if ($AllowProbable) {
+        $leftRoleFamily = Get-DedupeRoleFamily $leftTitle
+        $rightRoleFamily = Get-DedupeRoleFamily $rightTitle
+        if (-not [string]::IsNullOrWhiteSpace($leftRoleFamily) -and
+            $leftRoleFamily -eq $rightRoleFamily -and
+            $locationsCompatible -and
+            $titleSimilarity -ge $probableRoleThreshold) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Get-JobDedupeKeyFromValues {
     param(
         [AllowNull()][string]$Title,
@@ -206,7 +561,11 @@ function Get-JobDedupeKeyFromValues {
         [AllowNull()][string]$Url
     )
 
-    $companyKey = Get-DedupeCompanyKey $CompanyName
+    $companyKeys = @(Get-DedupeCompanyAliasKeys $CompanyName)
+    $companyKey = ""
+    if ($companyKeys.Count -gt 0) {
+        $companyKey = [string]$companyKeys[0]
+    }
     $titleKey = Get-DedupeTitleKey -Title $Title -CompanyName $CompanyName
     $locationKey = Get-DedupeLocationKey $JobLocation
 
@@ -591,20 +950,186 @@ function Merge-SimilarJobRows {
 function Group-RowsByDedupeKey {
     param([object[]]$Rows)
 
+    $rowList = @($Rows | Where-Object { $null -ne $_ })
     $groups = @{}
-    foreach ($row in @($Rows)) {
-        $key = Get-JobDedupeKeyFromRow $row
+    if ($rowList.Count -eq 0) {
+        return $groups
+    }
+
+    $parent = New-Object object[] $rowList.Count
+    for ($index = 0; $index -lt $rowList.Count; $index++) {
+        $parent[$index] = $index
+    }
+
+    function Find-DedupeGroupRoot {
+        param([int]$Index)
+
+        $root = $Index
+        while ([int]$parent[$root] -ne $root) {
+            $root = [int]$parent[$root]
+        }
+
+        $current = $Index
+        while ([int]$parent[$current] -ne $current) {
+            $next = [int]$parent[$current]
+            $parent[$current] = $root
+            $current = $next
+        }
+
+        return $root
+    }
+
+    function Join-DedupeGroupIndexes {
+        param(
+            [int]$Left,
+            [int]$Right
+        )
+
+        $leftRoot = Find-DedupeGroupRoot $Left
+        $rightRoot = Find-DedupeGroupRoot $Right
+        if ($leftRoot -ne $rightRoot) {
+            $parent[$rightRoot] = $leftRoot
+        }
+    }
+
+    $keyToIndexes = @{}
+    $companyBucketToIndexes = @{}
+    for ($index = 0; $index -lt $rowList.Count; $index++) {
+        $row = $rowList[$index]
+        $keys = @(Get-JobDuplicateKeysFromRow $row)
+        if ($keys.Count -eq 0) {
+            $fallbackKey = Get-JobDedupeKeyFromRow $row
+            if ([string]::IsNullOrWhiteSpace($fallbackKey)) {
+                $fallbackKey = "jobid|{0}" -f (Get-RowValue -Row $row -Name "job_id")
+            }
+            $keys = @($fallbackKey)
+        }
+
+        foreach ($key in @($keys | Select-Object -Unique)) {
+            if ([string]::IsNullOrWhiteSpace($key)) {
+                continue
+            }
+            if (-not $keyToIndexes.ContainsKey($key)) {
+                $keyToIndexes[$key] = New-Object System.Collections.Generic.List[int]
+            }
+            $keyToIndexes[$key].Add($index) | Out-Null
+        }
+
+        foreach ($companyKey in @(Get-DedupeCompanyAliasKeys (Get-RowValue -Row $row -Name "company_name"))) {
+            if ([string]::IsNullOrWhiteSpace($companyKey)) {
+                continue
+            }
+            if (-not $companyBucketToIndexes.ContainsKey($companyKey)) {
+                $companyBucketToIndexes[$companyKey] = New-Object System.Collections.Generic.List[int]
+            }
+            $companyBucketToIndexes[$companyKey].Add($index) | Out-Null
+        }
+    }
+
+    foreach ($key in $keyToIndexes.Keys) {
+        $indexes = @($keyToIndexes[$key].ToArray())
+        if ($indexes.Count -lt 2) {
+            continue
+        }
+        $first = [int]$indexes[0]
+        foreach ($index in @($indexes | Select-Object -Skip 1)) {
+            Join-DedupeGroupIndexes -Left $first -Right ([int]$index)
+        }
+    }
+
+    $seenPairs = @{}
+    foreach ($companyKey in $companyBucketToIndexes.Keys) {
+        $bucketIndexes = @($companyBucketToIndexes[$companyKey].ToArray() | Sort-Object -Unique)
+        if ($bucketIndexes.Count -lt 2) {
+            continue
+        }
+        for ($leftPosition = 0; $leftPosition -lt $bucketIndexes.Count; $leftPosition++) {
+            for ($rightPosition = $leftPosition + 1; $rightPosition -lt $bucketIndexes.Count; $rightPosition++) {
+                $leftIndex = [int]$bucketIndexes[$leftPosition]
+                $rightIndex = [int]$bucketIndexes[$rightPosition]
+                $pairKey = "{0}|{1}" -f ([Math]::Min($leftIndex, $rightIndex)), ([Math]::Max($leftIndex, $rightIndex))
+                if ($seenPairs.ContainsKey($pairKey)) {
+                    continue
+                }
+                $seenPairs[$pairKey] = $true
+            if ((Find-DedupeGroupRoot $leftIndex) -eq (Find-DedupeGroupRoot $rightIndex)) {
+                continue
+            }
+            if (Test-JobRowsAreDuplicates -Left $rowList[$leftIndex] -Right $rowList[$rightIndex] -AllowProbable) {
+                Join-DedupeGroupIndexes -Left $leftIndex -Right $rightIndex
+            }
+            }
+        }
+    }
+
+    $componentIndexes = @{}
+    for ($index = 0; $index -lt $rowList.Count; $index++) {
+        $root = [string](Find-DedupeGroupRoot $index)
+        if (-not $componentIndexes.ContainsKey($root)) {
+            $componentIndexes[$root] = New-Object System.Collections.Generic.List[int]
+        }
+        $componentIndexes[$root].Add($index) | Out-Null
+    }
+
+    foreach ($root in $componentIndexes.Keys) {
+        $indexes = @($componentIndexes[$root].ToArray())
+        $groupRows = @($indexes | ForEach-Object { $rowList[[int]$_] })
+        $groupKeys = @($groupRows | ForEach-Object { Get-JobDuplicateKeysFromRow $_ } | Select-Object -Unique)
+        $preferredKey = @($groupKeys | Where-Object { $_ -match "^hard-url\|" } | Sort-Object | Select-Object -First 1)
+        if ($preferredKey.Count -eq 0) {
+            $preferredKey = @($groupKeys | Where-Object { $_ -match "^source-id\|" } | Sort-Object | Select-Object -First 1)
+        }
+        if ($preferredKey.Count -eq 0) {
+            $preferredKey = @($groupKeys | Where-Object { $_ -match "^strong-company-title" } | Sort-Object | Select-Object -First 1)
+        }
+        if ($preferredKey.Count -eq 0) {
+            $preferredKey = @($groupKeys | Where-Object { $_ -match "^role-family-location" } | Sort-Object | Select-Object -First 1)
+        }
+        $key = ""
+        if ($preferredKey.Count -gt 0) {
+            $key = [string]$preferredKey[0]
+        }
+        else {
+            $key = Get-JobDedupeKeyFromRow $groupRows[0]
+        }
         if ([string]::IsNullOrWhiteSpace($key)) {
-            $key = "jobid|{0}" -f (Get-RowValue -Row $row -Name "job_id")
+            $key = "jobid|{0}" -f (Get-RowValue -Row $groupRows[0] -Name "job_id")
         }
 
         if (-not $groups.ContainsKey($key)) {
             $groups[$key] = New-Object System.Collections.Generic.List[object]
         }
-        $groups[$key].Add($row) | Out-Null
+        foreach ($row in $groupRows) {
+            $groups[$key].Add($row) | Out-Null
+        }
     }
 
     return $groups
+}
+
+function Find-DuplicateGroupKey {
+    param(
+        [AllowNull()]$Row,
+        [hashtable]$GroupsByKey,
+        [string[]]$ExcludedKeys = @()
+    )
+
+    if ($null -eq $Row -or $null -eq $GroupsByKey) {
+        return ""
+    }
+
+    foreach ($key in @($GroupsByKey.Keys | Sort-Object)) {
+        if ($ExcludedKeys -contains $key) {
+            continue
+        }
+        foreach ($candidate in @($GroupsByKey[$key].ToArray())) {
+            if (Test-JobRowsAreDuplicates -Left $Row -Right $candidate -AllowProbable) {
+                return [string]$key
+            }
+        }
+    }
+
+    return ""
 }
 
 function Test-IsInvalidExistingTrackerRow {
@@ -663,9 +1188,11 @@ function Merge-JobsWithTracker {
 
     $duplicateCount = 0
     $existingByKey = @{}
+    $existingGroupCountsByKey = @{}
     $existingGroups = Group-RowsByDedupeKey -Rows @($existingRecords.ToArray())
     foreach ($key in $existingGroups.Keys) {
         $groupRows = @($existingGroups[$key].ToArray())
+        $existingGroupCountsByKey[$key] = $groupRows.Count
         if ($groupRows.Count -gt 1) {
             $duplicateCount += ($groupRows.Count - 1)
         }
@@ -677,8 +1204,9 @@ function Merge-JobsWithTracker {
         $existingByKey[$key] = Merge-SimilarJobRows -Rows $groupRows -Reason $reason
     }
 
+    $currentInputGate = Invoke-JobPipelineEligibilityGate -Rows @($CurrentRows) -Stage "merge_current_input"
     $currentByKey = @{}
-    $currentGroups = Group-RowsByDedupeKey -Rows @($CurrentRows)
+    $currentGroups = Group-RowsByDedupeKey -Rows @($currentInputGate.KeptRows)
     foreach ($key in $currentGroups.Keys) {
         $groupRows = @($currentGroups[$key].ToArray())
         if ($groupRows.Count -gt 1) {
@@ -702,27 +1230,26 @@ function Merge-JobsWithTracker {
     $currentTrackerRows = New-Object System.Collections.Generic.List[object]
     $removedCount = 0
     foreach ($key in $currentByKey.Keys) {
-        $existing = $null
-        if ($existingByKey.ContainsKey($key)) {
-            $existing = $existingByKey[$key]
+        $existingKey = $key
+        if (-not $existingByKey.ContainsKey($existingKey)) {
+            $existingKey = Find-DuplicateGroupKey -Row $currentByKey[$key] -GroupsByKey $existingGroups -ExcludedKeys @($trackerByKey.Keys)
         }
 
-        $duplicateReason = $(if ($null -ne $existing) { "same normalized company/title/location from previous crawl" } else { "" })
+        $existing = $null
+        if (-not [string]::IsNullOrWhiteSpace($existingKey) -and $existingByKey.ContainsKey($existingKey)) {
+            $existing = $existingByKey[$existingKey]
+        }
+
+        $duplicateReason = $(if ($null -ne $existing) { "same hierarchical duplicate identity from previous crawl" } else { "" })
         $currentDuplicateReason = Get-RowValue -Row $currentByKey[$key] -Name "duplicate_reason"
         if (-not [string]::IsNullOrWhiteSpace($currentDuplicateReason)) {
             $duplicateReason = Join-CleanTextParts @($duplicateReason, $currentDuplicateReason)
         }
         $trackerRecord = ConvertTo-TrackerRecord -CurrentRow $currentByKey[$key] -ExistingRow $existing -SeenInCurrentCrawl:$true -DuplicateReason $duplicateReason
-        $trackerStatus = Get-RowValue -Row $trackerRecord -Name "status"
-        $trackerContract = Get-RowValue -Row $trackerRecord -Name "contract_type"
-        $currentContract = Get-RowValue -Row $currentByKey[$key] -Name "contract_type"
-        $existingContract = Get-RowValue -Row $existing -Name "contract_type"
-        $hasExcludedContract = (Test-IsExcludedContractType $trackerContract) -or
-            ([string]::IsNullOrWhiteSpace($currentContract) -and (Test-IsExcludedContractType $existingContract))
-
-        if ((Test-IsKeepForeverStatus $trackerStatus) -or
-            ((Test-IsRecentTrackerRow $trackerRecord) -and -not $hasExcludedContract)) {
-            $trackerByKey[$key] = $trackerRecord
+        $trackerDecision = Get-JobPipelineEligibility -Row $trackerRecord -CurrentRow $currentByKey[$key] -ExistingRow $existing -Stage "merge_current_final"
+        if ($trackerDecision.IsEligible) {
+            $trackerKey = $(if (-not [string]::IsNullOrWhiteSpace($existingKey) -and $existingByKey.ContainsKey($existingKey)) { $existingKey } else { $key })
+            $trackerByKey[$trackerKey] = $trackerRecord
             $currentTrackerRows.Add($trackerRecord) | Out-Null
         }
     }
@@ -734,21 +1261,16 @@ function Merge-JobsWithTracker {
         }
 
         $existing = $existingByKey[$key]
-        if (Test-IsKeepForeverStatus (Get-RowValue -Row $existing -Name "status")) {
+        $existingDecision = Get-JobPipelineEligibility -Row $existing -ExistingRow $existing -Stage "merge_existing_retention"
+        if ($existingDecision.KeepForever) {
             $trackerByKey[$key] = ConvertTo-TrackerRecord -CurrentRow $existing -ExistingRow $existing -SeenInCurrentCrawl:$false -DuplicateReason "kept by application status"
             $preservedAppliedCount++
         }
-        elseif (Test-IsInvalidExistingTrackerRow $existing) {
-            $removedCount++
-        }
-        elseif (Test-IsExcludedContractType (Get-RowValue -Row $existing -Name "contract_type")) {
-            $removedCount++
-        }
-        elseif (Test-IsRecentTrackerRow $existing) {
+        elseif ($existingDecision.IsEligible) {
             $trackerByKey[$key] = ConvertTo-TrackerRecord -CurrentRow $existing -ExistingRow $existing -SeenInCurrentCrawl:$false -DuplicateReason "not seen this crawl, still inside published-date retention window"
         }
         else {
-            $removedCount++
+            $removedCount += [Math]::Max(1, [int]$existingGroupCountsByKey[$key])
         }
     }
 
@@ -760,6 +1282,8 @@ function Merge-JobsWithTracker {
             platform,
             job_title
 
+    Test-JobPipelineInvariants -Rows $trackerRows -Stage "merge_output" -ThrowOnIssue | Out-Null
+
     $backupPath = ""
     if (-not $SkipBackup) {
         $backupPath = Backup-TrackerFile -Path $Path
@@ -769,6 +1293,8 @@ function Merge-JobsWithTracker {
         TrackerRows = @($trackerRows)
         CurrentRows = @($currentTrackerRows.ToArray())
         RemovedCount = $removedCount
+        RejectedCurrentCount = $currentInputGate.ExcludedCount
+        RejectedCurrentReasons = $currentInputGate.CountByReason
         DuplicateCount = $duplicateCount
         PreservedAppliedCount = $preservedAppliedCount
         BackupPath = $backupPath

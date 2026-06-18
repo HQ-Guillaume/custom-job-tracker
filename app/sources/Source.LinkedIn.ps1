@@ -48,7 +48,7 @@ function Get-LinkedInLocationFromHtml {
 }
 
 function Get-LinkedInJobs {
-    Set-RunWindowTitle "Job Crawler - LinkedIn"
+    Set-RunWindowTitle "Custom Job Tracker - LinkedIn"
     Write-RunStatus "Collecting LinkedIn jobs from public guest endpoints..."
     Write-RunStatus ("LinkedIn plan: {0} search query/queries, up to {1} page(s) each, then up to {2} ranked detail page(s)." -f $LinkedInQueries.Count, $MaxLinkedInSearchPages, $(if ($MaxLinkedInDetails -gt 0) { $MaxLinkedInDetails } else { "all" }))
     $stats = Start-SourceStats "LinkedIn"

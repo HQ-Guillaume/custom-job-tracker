@@ -5,12 +5,35 @@ on:
   pull_request:
 
 jobs:
-  parse:
+  core:
+    name: Core tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+          - ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run portable core test suite
+        shell: pwsh
+        run: ./tools/tests/Run-AllTests.ps1 -CoreOnly -SkipGui -SkipEnvironmentCompatibility
+
+  windows-gui:
+    name: Windows GUI smoke
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      - name: Run no-Excel test suite
-        shell: pwsh
-        run: ./tools/tests/Run-AllTests.ps1
+      - name: Build WinForms launcher
+        shell: powershell
+        run: ./app/cli/Launch-AnalyticsJobCrawlerGui.ps1 -BuildSelfTest
+
+      - name: Smoke-test WinForms launcher
+        shell: powershell
+        run: ./app/cli/Launch-AnalyticsJobCrawlerGui.ps1 -SmokeTest

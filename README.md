@@ -69,7 +69,7 @@ Close `jobs_tracker.xlsx` before launching the crawler so Excel does not lock th
 ## First Run
 
 1. Download or clone the repository.
-2. Double-click `Run-AnalyticsJobCrawler-GUI.vbs`.
+2. Double-click `Run-CustomJobTracker-GUI.vbs`.
 3. Keep the default `Digital Analytics` profile, or create a custom profile from the GUI.
 4. Keep the default public sources enabled, or add credentials for optional API sources.
 5. Click `Create tracker` to create an empty workbook, or click `Run crawl` to create and populate it.
@@ -82,9 +82,9 @@ Profiles, source checkboxes, and crawl modes are read from `config\profiles\`, `
 
 The root folder is kept for daily-use entry points only:
 
-- `Run-AnalyticsJobCrawler-GUI.vbs`: recommended no-console launcher
-- `Run-AnalyticsJobCrawler-GUI.cmd`: visible fallback launcher for the GUI
-- `Run-AnalyticsJobCrawler.cmd`: command-window fallback crawler
+- `Run-CustomJobTracker-GUI.vbs`: recommended no-console launcher
+- `Run-CustomJobTracker-GUI.cmd`: visible fallback launcher for the GUI
+- `Run-CustomJobTracker.cmd`: command-window fallback crawler
 - `README.md`: usage and maintenance guide
 
 Internal files are grouped by purpose:
@@ -103,21 +103,21 @@ The compact release zip excludes `tools\` and `.github\`; they stay in the GitHu
 Recommended: double-click the no-console WinForms launcher:
 
 ```text
-Run-AnalyticsJobCrawler-GUI.vbs
+Run-CustomJobTracker-GUI.vbs
 ```
 
 Fallback if Windows blocks `.vbs` files: double-click the command launcher:
 
 ```text
-Run-AnalyticsJobCrawler-GUI.cmd
+Run-CustomJobTracker-GUI.cmd
 ```
 
-The GUI lets you choose a profile, create/edit/duplicate profiles without editing JSON, choose Fast/Default/Deep mode, enable or disable sources, see live progress logs, open the tracker, force a fresh fetch when needed, and check whether credentials are configured.
+The GUI lets you choose a profile, create/edit/duplicate profiles without editing JSON, choose Fast/Default/Deep mode, enable or disable sources, see live progress logs, open the tracker, clean old managed cache/log files, force a fresh fetch when needed, and check whether credentials are configured.
 
 Command-line fallback: double-click:
 
 ```text
-Run-AnalyticsJobCrawler.cmd
+Run-CustomJobTracker.cmd
 ```
 
 The launcher asks for a crawl mode:
@@ -129,9 +129,9 @@ The launcher asks for a crawl mode:
 You can also pass the mode directly:
 
 ```text
-Run-AnalyticsJobCrawler.cmd Fast
-Run-AnalyticsJobCrawler.cmd Default
-Run-AnalyticsJobCrawler.cmd Deep
+Run-CustomJobTracker.cmd Fast
+Run-CustomJobTracker.cmd Default
+Run-CustomJobTracker.cmd Deep
 ```
 
 Custom modes added to `config\crawl_modes.json` can also be passed directly to the command launcher.
@@ -139,7 +139,7 @@ Custom modes added to `config\crawl_modes.json` can also be passed directly to t
 or run:
 
 ```powershell
-cd "path\to\job-crawler"
+cd "path\to\custom-job-tracker"
 powershell -ExecutionPolicy Bypass -File .\app\cli\Find-AnalyticsJobs.ps1
 ```
 
@@ -221,6 +221,11 @@ powershell -ExecutionPolicy Bypass -File .\tools\tests\Test-JobTrackerHealth.ps1
 ```
 
 The health check is available in a GitHub source checkout. It opens the workbook read-only and verifies the expected sheets, columns, hidden backend fields, clickable links, status values, duplicate job IDs, and status row formatting.
+If desktop Excel is not available, it falls back to the no-Excel OpenXML workbook health checker:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\diagnostics\Test-WorkbookHealthOpenXml.ps1
+```
 
 To compare a test crawl workbook against the current master:
 
@@ -367,9 +372,37 @@ powershell -ExecutionPolicy Bypass -File .\tools\tests\Test-JobCrawlerConfig.ps1
 
 Keep the weights moderate if you want to avoid missing relevant jobs. The role score should remain the strongest signal; preference scores are mainly for ordering review priority.
 
+## Pipeline
+
+Source crawlers may skip obvious old or excluded-contract jobs early to save time, but those early skips are only an optimization. The authoritative workflow is centralized in `app\core\JobTracker.Pipeline.ps1`:
+
+```text
+fetch source results
+normalize to tracker rows
+enrich details
+apply post-enrichment eligibility
+apply feedback scoring
+deduplicate and merge with tracker history
+apply final invariant validation
+export workbook
+```
+
+The pipeline gate owns hard rules such as published-date retention, excluded contracts, and invalid WTTJ locations. Merge and export call the same gate, so a late detail fetch or an existing tracker row cannot reintroduce a non-application CDD/freelance/internship/apprenticeship job or an old non-application job. Application-history statuses are intentionally preserved outside the 7-day window.
+
 ## Deduplication
 
-Jobs are merged by normalized company family, role title, and location family, not by URL alone. This helps catch:
+Jobs are merged with a hierarchy rather than one fragile key:
+
+```text
+1. same canonical URL
+2. same platform/source job id
+3. same company alias + strong normalized title
+4. same company alias + same role family + compatible location
+```
+
+Company names are normalized automatically, so labels such as `NEXTON`, `Nexton Consulting`, `L'Olivier Assurance`, and `Olivier` can still meet the same-company condition when the title/location evidence also supports a duplicate. Explicit company alias groups can also be added in `config\matching_rules.json` under `deduplication.company_aliases`, or privately in `config\local.matching_rules.json`.
+
+Jobs are still not merged by company alone. The alias layer only helps when URL, source id, title similarity, role family, or location compatibility supports the duplicate. This helps catch:
 
 - the same job reposted with a different published date
 - the same offer appearing on LinkedIn, Welcome to the Jungle, APEC, HelloWork, France Travail, or Adzuna
@@ -526,7 +559,10 @@ powershell -ExecutionPolicy Bypass -File .\tools\tests\Test-EnvironmentCompatibi
 - Keep recent files in `output\backups` only for rollback; old backups are pruned automatically.
 - Daily runnable scripts live in `app\cli\`.
 - Runtime modules live in `app\core\`.
-- Source-specific crawlers live in `app\sources\`.
+- Hard workflow gates live in `app\core\JobTracker.Pipeline.ps1`; change this module when a rule must apply to every source and merge/export path.
+- Source-specific crawlers live in `app\sources\`. Files named `Source.*.ps1` are auto-discovered; source metadata still belongs in `config\sources.json`.
+- Source adapter validation lives in `app\core\JobTracker.SourceAdapter.ps1`.
+- Output/cache cleanup helpers live in `app\core\JobTracker.OutputMaintenance.ps1`.
 - Development tools and parser fixtures live in `tools\` in the GitHub source repository and are excluded from the compact release zip.
 - Run `tools\tests\Run-AllTests.ps1` after larger source changes. Add `-CoreOnly` or `-SkipGui` for non-GUI checks, and add `-IncludeWorkbookHealth` when Excel is available and you also want to inspect the tracker workbook.
 - Run `tools\tests\Test-EnvironmentCompatibility.ps1` after changing launchers, Excel integration, or setup requirements.
@@ -534,6 +570,8 @@ powershell -ExecutionPolicy Bypass -File .\tools\tests\Test-EnvironmentCompatibi
 - Run `tools\tests\Test-JobTrackerHealth.ps1` after larger changes or if the workbook looks odd.
 - Run `tools\tests\Test-ScoringRules.ps1` after changing matching, feedback, or preference rules. It does not require Excel.
 - Run `tools\tests\Test-ParserFixtures.ps1` after changing APEC, HelloWork, LinkedIn, or dedupe parsing. It does not require Excel or network access.
+- Run `tools\tests\Test-PipelineGuards.ps1` after changing retention, contract, location, merge, or final export eligibility.
+- Run `tools\tests\Test-SourceAdapters.ps1` after adding or renaming a source adapter.
 - Run `tools\tests\Test-Integration.ps1` after changing source orchestration, deduplication, cache pruning, or run history.
 - Run `tools\release\Test-ReleaseSafety.ps1` before publishing a public release.
 - Shared workbook schema and styling helpers live in `app\core\JobTracker.Common.ps1`.
@@ -572,4 +610,17 @@ To bypass the local detail-page cache for a fresh diagnostic run:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\app\cli\Find-AnalyticsJobs.ps1 -DisableCache
+```
+
+To review or clean managed output without opening the GUI:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\app\cli\Clear-JobTrackerOutput.ps1
+powershell -ExecutionPolicy Bypass -File .\app\cli\Clear-JobTrackerOutput.ps1 -Cache -Logs
+```
+
+To review how your status and ignore notes could tune future matching:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\diagnostics\Get-FeedbackTuningSuggestions.ps1
 ```

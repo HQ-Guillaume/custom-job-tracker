@@ -4,5 +4,12 @@
                        "medium_score":  50,
                        "high_score":  80,
                        "no_core_title_cap":  49
-                   }
+                   },
+    "deduplication":  {
+                          "strong_title_similarity_threshold":  0.72,
+                          "probable_role_similarity_threshold":  0.35,
+                          "company_aliases":  [
+
+                                              ]
+                      }
 }

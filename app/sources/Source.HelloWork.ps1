@@ -218,7 +218,7 @@ function Get-HelloWorkCardCandidates {
 }
 
 function Get-HelloWorkJobs {
-    Set-RunWindowTitle "Job Crawler - HelloWork"
+    Set-RunWindowTitle "Custom Job Tracker - HelloWork"
     Write-RunStatus "Collecting HelloWork jobs from public search pages..."
     Write-RunStatus ("HelloWork plan: {0} query/queries, {1} page(s) each, then at most {2} unique detail page(s)." -f $HelloWorkQueries.Count, $MaxHelloWorkPages, $MaxHelloWorkDetails)
 

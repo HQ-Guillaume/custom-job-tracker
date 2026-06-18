@@ -68,7 +68,7 @@ function New-ApecSearchBody {
 }
 
 function Get-ApecJobs {
-    Set-RunWindowTitle "Job Crawler - APEC"
+    Set-RunWindowTitle "Custom Job Tracker - APEC"
     Write-RunStatus "Collecting APEC jobs from the public search endpoint..."
     Write-RunStatus ("APEC plan: {0} query/queries, up to {1} page(s) each, no detail-page crawl." -f $ApecQueries.Count, $MaxApecPages)
 

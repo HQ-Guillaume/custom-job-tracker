@@ -53,17 +53,19 @@ $SourcesRoot = Join-Path $ProjectRoot "app\sources"
 
 . (Join-Path $CoreRoot "JobTracker.Common.ps1")
 . (Join-Path $CoreRoot "JobTracker.Config.ps1")
+. (Join-Path $CoreRoot "JobTracker.Context.ps1")
 . (Join-Path $CoreRoot "JobTracker.Runtime.ps1")
+. (Join-Path $CoreRoot "JobTracker.SourceAdapter.ps1")
 . (Join-Path $CoreRoot "JobTracker.Scoring.ps1")
 . (Join-Path $CoreRoot "JobTracker.Deduplication.ps1")
 . (Join-Path $CoreRoot "JobTracker.Excel.ps1")
-. (Join-Path $SourcesRoot "Source.FranceTravail.ps1")
-. (Join-Path $SourcesRoot "Source.Adzuna.ps1")
-. (Join-Path $SourcesRoot "Source.Apec.ps1")
-. (Join-Path $SourcesRoot "Source.HelloWork.ps1")
-. (Join-Path $SourcesRoot "Source.Wttj.ps1")
-. (Join-Path $SourcesRoot "Source.LinkedIn.ps1")
+. (Join-Path $CoreRoot "JobTracker.Pipeline.ps1")
 . (Join-Path $CoreRoot "JobTracker.SelfTest.ps1")
+
+$LoadedSourceAdapters = @(Get-JobCrawlerSourceAdapterFiles -SourcesRoot $SourcesRoot)
+foreach ($sourceAdapter in $LoadedSourceAdapters) {
+    . $sourceAdapter.Path
+}
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -116,6 +118,7 @@ function ConvertTo-JobCrawlerSourceKeySet {
 }
 
 $SourceDefinitions = @(Get-JobCrawlerSourceDefinitions -SourcesConfig $JobCrawlerSourcesConfig)
+$sourceContract = Assert-JobCrawlerSourceContract -SourceDefinitions $SourceDefinitions -LoadedFiles $LoadedSourceAdapters
 $EnabledSourceKeys = ConvertTo-JobCrawlerSourceKeySet -SourceKeys $EnableSource
 $SkippedSourceKeys = ConvertTo-JobCrawlerSourceKeySet -SourceKeys $SkipSource
 $KnownSourceKeys = @{}
@@ -375,15 +378,36 @@ $ColumnLabels = Get-JobTrackerColumnLabels
 
 $JobCrawlerPreferences = Get-JobCrawlerPreferences
 
+$JobCrawlerContext = New-JobCrawlerContext -ProjectRoot $ProjectRoot -ConfigDirectory $configPath -Config $JobCrawlerConfig -Runtime @{
+    BrowserUserAgent = $BrowserUserAgent
+    Cutoff = $Cutoff
+    CutoffDate = $CutoffDate
+    RunDate = $RunDate
+    RunStamp = $RunStamp
+    TrackerPath = $TrackerPath
+    DefaultTrackerPath = $DefaultTrackerPath
+    CacheDirectory = $CacheDirectory
+    CacheTtlHours = $CacheTtlHours
+    DisableCache = [bool]$DisableCache
+    CrawlMode = $CrawlMode
+    Location = $Location
+    MinimumMatchScore = $MinimumMatchScore
+    SourceDefinitions = $SourceDefinitions
+    SourceEnabled = $SourceEnabled
+    LoadedSourceAdapters = $LoadedSourceAdapters
+}
+Set-JobCrawlerScriptContext -Context $JobCrawlerContext | Out-Null
+
 if ($SelfTest) {
     Invoke-ScoringSelfTest
     return
 }
 
-Set-RunWindowTitle "Job Crawler - Starting"
+Set-RunWindowTitle "Custom Job Tracker - Starting"
 Write-RunStatus ("Starting crawl for jobs published since {0}." -f $CutoffDate)
 Write-RunStatus ("Profile: {0} ({1})" -f $JobCrawlerConfig.Profile.Label, $JobCrawlerConfig.Profile.Id)
 Write-RunStatus ("Tracker file: {0}" -f $TrackerPath)
+Write-RunStatus ("Loaded {0} source adapter file(s)." -f @($sourceContract.LoadedFiles).Count)
 
 $cachePruneResult = [PSCustomObject]@{ RemovedFiles = 0; RemovedBytes = 0; RemainingBytes = 0 }
 if (-not $DisableCache) {
@@ -422,10 +446,11 @@ foreach ($source in $SourceDefinitions) {
 
 $sortedCrawlResults = $allResults |
     Sort-Object -Property @{ Expression = "match_score"; Descending = $true }, @{ Expression = "published_date"; Descending = $true }, platform, job_title
-$recentCrawlResults = @($sortedCrawlResults | Where-Object { Test-IsRecentTrackerRow $_ })
-$excludedOldCount = @($sortedCrawlResults).Count - @($recentCrawlResults).Count
-$filteredCrawlResults = @($recentCrawlResults | Where-Object { -not (Test-IsExcludedContractType (Get-RowValue -Row $_ -Name "contract_type")) })
-$excludedContractCount = @($recentCrawlResults).Count - @($filteredCrawlResults).Count
+$postEnrichmentGate = Invoke-JobPipelineEligibilityGate -Rows @($sortedCrawlResults) -Stage "post_enrichment"
+$filteredCrawlResults = @($postEnrichmentGate.KeptRows)
+$excludedOldCount = Get-JobPipelineReasonCount -GateResult $postEnrichmentGate -Reason @("outside_published_window", "missing_published_date")
+$excludedContractCount = Get-JobPipelineReasonCount -GateResult $postEnrichmentGate -Reason @("excluded_contract")
+$excludedInvalidLocationCount = Get-JobPipelineReasonCount -GateResult $postEnrichmentGate -Reason @("invalid_location")
 
 if ($excludedOldCount -gt 0) {
     Write-RunStatus ("Excluded {0} job(s) outside the published-date window after detail enrichment." -f $excludedOldCount)
@@ -435,6 +460,10 @@ if ($excludedContractCount -gt 0) {
     Write-RunStatus ("Excluded {0} CDD/apprenticeship/internship/freelance job(s) from this crawl." -f $excludedContractCount)
 }
 
+if ($excludedInvalidLocationCount -gt 0) {
+    Write-RunStatus ("Excluded {0} job(s) with invalid or unsupported location after detail enrichment." -f $excludedInvalidLocationCount)
+}
+
 $diagnosticPath = ""
 if ($DiagnosticMode) {
     $diagnosticDirectory = Resolve-JobCrawlerPath -BasePath $ProjectRoot -Path ([string](Get-ConfigPathValue -Object $JobCrawlerRuntimeConfig -Path "output.diagnostics_directory" -DefaultValue "output\diagnostics"))
@@ -442,27 +471,22 @@ if ($DiagnosticMode) {
         New-Item -ItemType Directory -Force -Path $diagnosticDirectory | Out-Null
     }
     $diagnosticPath = Join-Path $diagnosticDirectory ("crawl_diagnostics_{0}.csv" -f $RunStamp)
-    $diagnosticRows = @($sortedCrawlResults | ForEach-Object {
-        $contractType = Get-RowValue -Row $_ -Name "contract_type"
-        $diagnosticStatus = "kept_for_merge"
-        if (-not (Test-IsRecentTrackerRow $_)) {
-            $diagnosticStatus = "excluded_old"
-        }
-        elseif (Test-IsExcludedContractType $contractType) {
-            $diagnosticStatus = "excluded_contract"
-        }
+    $diagnosticRows = @($postEnrichmentGate.Decisions | ForEach-Object {
+        $row = $_.Row
+        $contractType = Get-RowValue -Row $row -Name "contract_type"
+        $diagnosticStatus = $(if ($_.IsEligible) { "kept_for_merge" } else { $_.Reason })
         [PSCustomObject]@{
             diagnostic_status = $diagnosticStatus
-            platform          = Get-RowValue -Row $_ -Name "platform"
-            match_level       = Get-RowValue -Row $_ -Name "match_level"
-            match_score       = Get-RowValue -Row $_ -Name "match_score"
-            job_title         = Get-RowValue -Row $_ -Name "job_title"
-            company_name      = Get-RowValue -Row $_ -Name "company_name"
-            location          = Get-RowValue -Row $_ -Name "location"
+            platform          = Get-RowValue -Row $row -Name "platform"
+            match_level       = Get-RowValue -Row $row -Name "match_level"
+            match_score       = Get-RowValue -Row $row -Name "match_score"
+            job_title         = Get-RowValue -Row $row -Name "job_title"
+            company_name      = Get-RowValue -Row $row -Name "company_name"
+            location          = Get-RowValue -Row $row -Name "location"
             contract_type     = $contractType
-            published_date    = Get-RowValue -Row $_ -Name "published_date"
-            matched_keywords  = Get-RowValue -Row $_ -Name "matched_keywords"
-            job_url           = Get-RowValue -Row $_ -Name "job_url_raw"
+            published_date    = Get-RowValue -Row $row -Name "published_date"
+            matched_keywords  = Get-RowValue -Row $row -Name "matched_keywords"
+            job_url           = Get-RowValue -Row $row -Name "job_url_raw"
         }
     })
     $diagnosticRows | Export-Csv -LiteralPath $diagnosticPath -NoTypeInformation -Encoding UTF8
@@ -472,6 +496,7 @@ if ($DiagnosticMode) {
 $feedbackAdjustedResults = @(Apply-FeedbackScoring -Rows $filteredCrawlResults -ExistingRows $existingTrackerRows)
 $mergeResult = Merge-JobsWithTracker -CurrentRows $feedbackAdjustedResults -ExistingRows $existingTrackerRows -Path $TrackerPath -SkipBackup:$DryRun
 $finalResults = @($mergeResult.TrackerRows)
+Test-JobPipelineInvariants -Rows $finalResults -Stage "pre_export" -ThrowOnIssue | Out-Null
 
 $crawlCaps = @(
     "LinkedIn pages $MaxLinkedInSearchPages"
@@ -490,6 +515,9 @@ $crawlSummary = @{
     Profile = ("{0} ({1})" -f $JobCrawlerConfig.Profile.Label, $JobCrawlerConfig.Profile.Id)
     TotalMatched = @($sortedCrawlResults).Count
     ExcludedContractCount = $excludedContractCount
+    ExcludedOldCount = $excludedOldCount
+    ExcludedInvalidLocationCount = $excludedInvalidLocationCount
+    PipelineExclusionSummary = Format-JobPipelineReasonSummary -GateResult $postEnrichmentGate
     CurrentCount = @($mergeResult.CurrentRows).Count
     TrackerCount = @($finalResults).Count
     DuplicateCount = $mergeResult.DuplicateCount
@@ -513,7 +541,7 @@ if (-not $DryRun) {
 
 Write-RunHistoryEntry -Summary $crawlSummary -Path $RunHistoryPath -MaxEntries $RunHistoryMaxEntries
 
-Set-RunWindowTitle "Job Crawler - Finished"
+Set-RunWindowTitle "Custom Job Tracker - Finished"
 Write-Host ""
 if ($DryRun) {
     Write-RunStatus ("Dry run complete. Workbook was not written. Simulated tracker rows: {0}; current jobs: {1}; preserved application rows: {2}; removed by retention: {3}." -f @($finalResults).Count, @($mergeResult.CurrentRows).Count, $mergeResult.PreservedAppliedCount, $mergeResult.RemovedCount)

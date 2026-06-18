@@ -730,7 +730,7 @@ function Export-TrackerWorkbookWithOpenXml {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
-    $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("job-crawler-xlsx-{0}" -f ([Guid]::NewGuid().ToString("N")))
+    $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("custom-job-tracker-xlsx-{0}" -f ([Guid]::NewGuid().ToString("N")))
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
     try {
         $sheetNames = @{
@@ -832,7 +832,7 @@ function Export-TrackerWorkbookWithOpenXml {
         Write-OpenXmlUtf8File -Path (Join-Path $tempRoot "xl\worksheets\sheet5.xml") -Content (New-OpenXmlObjectListSheetXml -Title "Feedback Quality" -Rows $feedbackRows)
         Write-OpenXmlUtf8File -Path (Join-Path $tempRoot "xl\worksheets\sheet6.xml") -Content (New-OpenXmlValidationSheetXml)
 
-        $tempFile = Join-Path ([IO.Path]::GetTempPath()) ("job-crawler-xlsx-{0}.xlsx" -f ([Guid]::NewGuid().ToString("N")))
+        $tempFile = Join-Path ([IO.Path]::GetTempPath()) ("custom-job-tracker-xlsx-{0}.xlsx" -f ([Guid]::NewGuid().ToString("N")))
         if (Test-Path -LiteralPath $tempFile) {
             Remove-Item -LiteralPath $tempFile -Force
         }

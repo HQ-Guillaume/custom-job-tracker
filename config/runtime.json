@@ -15,7 +15,8 @@
     "output":  {
                    "diagnostics_directory":  "output\\diagnostics",
                    "run_history_path":  "output\\run_history.jsonl",
-                   "run_history_max_entries":  250
+                   "run_history_max_entries":  250,
+                   "cleanup_default_age_days":  14
                },
     "http":  {
                  "user_agent":  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",

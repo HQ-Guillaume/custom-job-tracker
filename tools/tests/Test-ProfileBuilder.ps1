@@ -19,7 +19,7 @@ function Assert-ProfileBuilder {
     }
 }
 
-$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("job-crawler-profile-{0}" -f ([Guid]::NewGuid().ToString("N")))
+$tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("custom-job-tracker-profile-{0}" -f ([Guid]::NewGuid().ToString("N")))
 $tempConfig = Join-Path $tempRoot "config"
 
 New-Item -ItemType Directory -Path $tempRoot | Out-Null

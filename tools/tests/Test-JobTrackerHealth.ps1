@@ -49,7 +49,16 @@ $dataRange = $null
 
 try {
     $fullPath = (Resolve-Path -LiteralPath $TrackerPath).Path
-    $excel = New-Object -ComObject Excel.Application
+    try {
+        $excel = New-Object -ComObject Excel.Application
+    }
+    catch {
+        Write-Host ("Excel COM health check unavailable: {0}" -f $_.Exception.Message)
+        Write-Host "Falling back to no-Excel OpenXML workbook health check."
+        $openXmlHealthPath = Join-Path $projectRoot "tools\diagnostics\Test-WorkbookHealthOpenXml.ps1"
+        & $openXmlHealthPath -TrackerPath $TrackerPath -WarnOnly:$WarnOnly
+        return
+    }
     $excel.Visible = $false
     $excel.DisplayAlerts = $false
     $workbook = $excel.Workbooks.Open($fullPath, 0, $true)

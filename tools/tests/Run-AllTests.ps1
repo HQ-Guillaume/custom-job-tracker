@@ -54,7 +54,11 @@ $testScripts = @(
     "Test-ScoringRules.ps1",
     "Test-ParserFixtures.ps1",
     "Test-ProfileBuilder.ps1",
+    "Test-SourceAdapters.ps1",
+    "Test-PipelineGuards.ps1",
     "Test-OpenXmlWorkbook.ps1",
+    "Test-OpenXmlWorkbookHealth.ps1",
+    "Test-FeedbackSuggestions.ps1",
     "Test-Integration.ps1",
     "Test-JobCrawlerConfig.ps1",
     "Test-PortableProjectRoot.ps1"

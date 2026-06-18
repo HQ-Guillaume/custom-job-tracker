@@ -16,6 +16,8 @@ $script:CoreDirectory = Join-Path $script:ProjectRoot "app\core"
 
 . (Join-Path $script:CoreDirectory "JobTracker.Common.ps1")
 . (Join-Path $script:CoreDirectory "JobTracker.Config.ps1")
+. (Join-Path $script:CoreDirectory "JobTracker.Runtime.ps1")
+. (Join-Path $script:CoreDirectory "JobTracker.OutputMaintenance.ps1")
 
 function Set-LauncherCrawlerConfig {
     param([string]$ProfileId = "")
@@ -98,7 +100,7 @@ if ($SelfTest) {
 }
 
 if ([Threading.Thread]::CurrentThread.ApartmentState -ne "STA") {
-    throw "Start the GUI with powershell.exe -STA -File .\app\cli\Launch-AnalyticsJobCrawlerGui.ps1, or double-click Run-AnalyticsJobCrawler-GUI.cmd."
+    throw "Start the GUI with powershell.exe -STA -File .\app\cli\Launch-AnalyticsJobCrawlerGui.ps1, or double-click Run-CustomJobTracker-GUI.cmd."
 }
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -140,6 +142,7 @@ $script:DisableCacheCheckBox = $null
 $script:ExcelAutomationAvailable = $null
 $script:ExcelAutomationCheckedAt = [DateTime]::MinValue
 $script:WorkbookWriterPlan = $null
+$script:CleanupButton = $null
 
 function Write-LauncherError {
     param(
@@ -179,7 +182,7 @@ function Show-LauncherException {
         Add-LogLine ("ERROR: {0}" -f $message.Replace("`n", " "))
     }
 
-    [System.Windows.Forms.MessageBox]::Show($message, "Job Crawler Launcher") | Out-Null
+    [System.Windows.Forms.MessageBox]::Show($message, "Custom Job Tracker Launcher") | Out-Null
 }
 
 function Invoke-LauncherAction {
@@ -259,6 +262,9 @@ function Set-LauncherRunningState {
     $script:DryRunCheckBox.Enabled = -not $IsRunning
     $script:DiagnosticModeCheckBox.Enabled = -not $IsRunning
     $script:DisableCacheCheckBox.Enabled = -not $IsRunning
+    if ($null -ne $script:CleanupButton) {
+        $script:CleanupButton.Enabled = -not $IsRunning
+    }
 
     if ($IsRunning) {
         $script:ProgressBar.Style = [System.Windows.Forms.ProgressBarStyle]::Marquee
@@ -840,7 +846,7 @@ function Refresh-ReadinessChecklist {
 
         $outputPath = Get-LauncherOutputDirectory
         if (Test-Path -LiteralPath $outputPath) {
-            Add-ReadinessItem -Area "Output" -Status "Ready" -Detail $outputPath
+            Add-ReadinessItem -Area "Output" -Status "Ready" -Detail (Get-LauncherOutputStatsText)
         }
         else {
             Add-ReadinessItem -Area "Output" -Status "Will create" -Detail $outputPath -Level "warning"
@@ -1234,6 +1240,30 @@ function Initialize-TrackerFromGui {
     }
 }
 
+function Get-LauncherOutputStatsText {
+    $outputDirectory = Get-LauncherOutputDirectory
+    $cacheDirectory = Resolve-JobCrawlerPath -BasePath $script:ProjectRoot -Path ([string](Get-ConfigPathValue -Object $script:CrawlerConfig.Runtime -Path "defaults.cache_directory" -DefaultValue "output\cache"))
+    $cacheStats = Get-JobCrawlerDirectoryStats -Label "cache" -Path $cacheDirectory
+    $logStats = Get-JobCrawlerDirectoryStats -Label "logs" -Path (Join-Path $outputDirectory "launcher_logs")
+    return ("{0} | cache {1:N2} MB/{2} files | logs {3:N2} MB/{4} files" -f $outputDirectory, [double]$cacheStats.Megabytes, [int]$cacheStats.FileCount, [double]$logStats.Megabytes, [int]$logStats.FileCount)
+}
+
+function Clean-ManagedOutputFromGui {
+    $cacheDirectory = Resolve-JobCrawlerPath -BasePath $script:ProjectRoot -Path ([string](Get-ConfigPathValue -Object $script:CrawlerConfig.Runtime -Path "defaults.cache_directory" -DefaultValue "output\cache"))
+    $script:JobCrawlerRuntimeConfig = $script:CrawlerConfig.Runtime
+    $script:CacheDirectory = $cacheDirectory
+    $ageDays = [int](Get-ConfigPathValue -Object $script:CrawlerConfig.Runtime -Path "output.cleanup_default_age_days" -DefaultValue 14)
+    Add-LogLine ("Cleaning managed cache/log files older than {0} day(s)..." -f $ageDays)
+
+    $results = @(Invoke-JobCrawlerOutputCleanup -ProjectRoot $script:ProjectRoot -CacheDirectory $cacheDirectory -Cache -Logs -OlderThanDays $ageDays)
+    foreach ($result in $results) {
+        Add-LogLine ("Cleanup {0}: removed {1} file(s), {2:N2} MB." -f $result.Label, $result.RemovedFiles, [double]$result.RemovedMB)
+    }
+
+    Set-LauncherStatus "Output cleanup finished."
+    Refresh-ReadinessChecklist
+}
+
 function Open-TrackerWorkbook {
     $path = Get-LauncherDefaultTrackerPath
     if (-not (Test-Path -LiteralPath $path)) {
@@ -1253,7 +1283,7 @@ function Open-OutputFolder {
 
 $form = New-Object System.Windows.Forms.Form
 $script:MainForm = $form
-$form.Text = "Job Crawler"
+$form.Text = "Custom Job Tracker"
 $form.StartPosition = "CenterScreen"
 $form.MinimumSize = New-Object System.Drawing.Size(1040, 760)
 $form.Size = New-Object System.Drawing.Size(1180, 820)
@@ -1281,7 +1311,7 @@ Add-ProfileTableRow -Table $headerPanel -Height 28 -Absolute
 $mainLayout.Controls.Add($headerPanel, 0, 0)
 
 $header = New-Object System.Windows.Forms.Label
-$header.Text = "Job Crawler"
+$header.Text = "Custom Job Tracker"
 $header.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 18)
 $header.Dock = [System.Windows.Forms.DockStyle]::Fill
 $header.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
@@ -1440,6 +1470,12 @@ $openOutputButton.Text = "Output"
 $openOutputButton.Size = New-Object System.Drawing.Size(74, 28)
 $openOutputButton.Add_Click({ Invoke-LauncherAction -Context "Open output folder" -Action { Open-OutputFolder } })
 [void]$utilityButtons.Controls.Add($openOutputButton)
+
+$script:CleanupButton = New-Object System.Windows.Forms.Button
+$script:CleanupButton.Text = "Clean output"
+$script:CleanupButton.Size = New-Object System.Drawing.Size(104, 28)
+$script:CleanupButton.Add_Click({ Invoke-LauncherAction -Context "Clean output" -Action { Clean-ManagedOutputFromGui } })
+[void]$utilityButtons.Controls.Add($script:CleanupButton)
 
 $bodySplit = New-Object System.Windows.Forms.SplitContainer
 $bodySplit.Dock = [System.Windows.Forms.DockStyle]::Fill

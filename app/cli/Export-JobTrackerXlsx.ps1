@@ -17,6 +17,7 @@ $CoreRoot = Join-Path $ProjectRoot "app\core"
 . (Join-Path $CoreRoot "JobTracker.Scoring.ps1")
 . (Join-Path $CoreRoot "JobTracker.Deduplication.ps1")
 . (Join-Path $CoreRoot "JobTracker.Excel.ps1")
+. (Join-Path $CoreRoot "JobTracker.Pipeline.ps1")
 
 $configPath = Resolve-JobCrawlerPath -BasePath $ProjectRoot -Path $ConfigDirectory
 $JobCrawlerConfig = Get-JobCrawlerConfig -ConfigDirectory $configPath -ProfileId $Profile
@@ -59,6 +60,10 @@ $MasterColumns = Get-JobTrackerMasterColumns
 $ColumnLabels = Get-JobTrackerColumnLabels
 
 $rows = @(Import-TrackerRows -Path $TrackerPath)
+$pipelineValidation = Test-JobPipelineInvariants -Rows $rows -Stage "reformat_existing"
+if (-not $pipelineValidation.IsValid) {
+    Write-Warning ("Existing tracker contains {0} non-application row(s) that fail current pipeline rules. Reformatting is kept non-destructive." -f @($pipelineValidation.Issues).Count)
+}
 $summary = @{
     Profile = ("{0} ({1})" -f $JobCrawlerConfig.Profile.Label, $JobCrawlerConfig.Profile.Id)
     TotalMatched = @($rows).Count

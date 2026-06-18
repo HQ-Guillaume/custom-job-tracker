@@ -18,6 +18,7 @@ $CoreRoot = Join-Path $ProjectRoot "app\core"
 . (Join-Path $CoreRoot "JobTracker.Scoring.ps1")
 . (Join-Path $CoreRoot "JobTracker.Deduplication.ps1")
 . (Join-Path $CoreRoot "JobTracker.Excel.ps1")
+. (Join-Path $CoreRoot "JobTracker.Pipeline.ps1")
 
 $configPath = Resolve-JobCrawlerPath -BasePath $ProjectRoot -Path $ConfigDirectory
 $JobCrawlerConfig = Get-JobCrawlerConfig -ConfigDirectory $configPath -ProfileId $Profile

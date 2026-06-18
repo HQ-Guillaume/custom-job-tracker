@@ -353,7 +353,7 @@ function Get-WelcomeKitJobs {
         return @()
     }
 
-    Set-RunWindowTitle "Job Crawler - WTTJ API"
+    Set-RunWindowTitle "Custom Job Tracker - WTTJ API"
     Write-RunStatus "Collecting Welcome to the Jungle jobs through the official WelcomeKit API..."
     $stats = Start-SourceStats "WelcomeKit"
     $results = New-Object System.Collections.Generic.List[object]
@@ -450,7 +450,7 @@ function Get-WttjPublicFallbackJobs {
         return @()
     }
 
-    Set-RunWindowTitle "Job Crawler - WTTJ"
+    Set-RunWindowTitle "Custom Job Tracker - WTTJ"
     Write-RunStatus "Collecting Welcome to the Jungle jobs from public sitemaps..."
     $stats = Start-SourceStats "WTTJ public"
     $results = New-Object System.Collections.Generic.List[object]
