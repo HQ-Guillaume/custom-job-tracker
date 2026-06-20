@@ -10,7 +10,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$isWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+$runningOnWindows = [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
 
 Write-Host "Parsing PowerShell files..."
 $files = @(Get-ChildItem -Path $projectRoot -Filter *.ps1 -File -Recurse |
@@ -24,7 +24,7 @@ foreach ($file in $files) {
     }
 }
 
-if (-not $CoreOnly -and -not $SkipGui -and $isWindows) {
+if (-not $CoreOnly -and -not $SkipGui -and $runningOnWindows) {
     Write-Host "Building WinForms launcher..."
     $windowsPowerShell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     if (-not (Test-Path -LiteralPath $windowsPowerShell)) {
@@ -43,7 +43,7 @@ if (-not $CoreOnly -and -not $SkipGui -and $isWindows) {
         throw "WinForms launcher run smoke test failed."
     }
 }
-elseif (-not $isWindows) {
+elseif (-not $runningOnWindows) {
     Write-Host "Skipping WinForms launcher tests on this platform."
 }
 else {
