@@ -100,6 +100,12 @@ try {
         -ExcludedContracts @("CDD", "Internship", "Freelance")
     Assert-ProfileBuilder -Condition ($strongQuality.Score -ge 70) -Message "Expected richer profiles to receive a good quality score."
 
+    $digitalSuggestions = @(Get-JobCrawlerSearchQuerySuggestions -Label "Digital analyst" -TargetTitles @("digital analyst") -ImportantSkills @())
+    $mergedDigitalQueries = @(Merge-JobCrawlerProfileLineArrays -Primary "digital analyst" -Secondary $digitalSuggestions -MaxItems 24)
+    Assert-ProfileBuilder -Condition ($mergedDigitalQueries[0] -eq "digital analyst") -Message "Expected query merge to keep the existing scalar query as its own line."
+    Assert-ProfileBuilder -Condition ($mergedDigitalQueries -contains "digital analytics") -Message "Expected query merge to add suggested role variants."
+    Assert-ProfileBuilder -Condition (-not ($mergedDigitalQueries[0] -like "digital analystdigital*")) -Message "Expected query merge not to concatenate scalar and array values."
+
     $removedProfilePath = Remove-JobCrawlerLocalProfile -ConfigDirectory $tempConfig -ProfileId "one_query_analyst"
     Assert-ProfileBuilder -Condition (-not (Test-Path -LiteralPath $removedProfilePath)) -Message "Expected local profile deletion to remove the profile file."
     [void](Set-JobCrawlerDefaultProfile -ConfigDirectory $tempConfig -ProfileId "crm_analyst")

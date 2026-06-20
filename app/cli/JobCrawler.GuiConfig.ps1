@@ -783,11 +783,8 @@ function Show-ProfileEditorDialog {
     }
     $mergeQuerySuggestions = {
         $quality = & $getQualityFromEditor
-        $mergedQueries = New-Object System.Collections.Generic.List[string]
-        foreach ($query in @((Get-TextBoxLines $queriesBox) + @($quality.QuerySuggestions))) {
-            Add-JobCrawlerProfileUniqueString -List $mergedQueries -Value $query
-        }
-        Set-TextBoxLines -TextBox $queriesBox -Lines @($mergedQueries.ToArray())
+        $mergedQueries = @(Merge-JobCrawlerProfileLineArrays -Primary (Get-TextBoxLines $queriesBox) -Secondary $quality.QuerySuggestions -MaxItems 24)
+        Set-TextBoxLines -TextBox $queriesBox -Lines $mergedQueries
         & $updateQualityPreview
     }
     $improveQueriesButton.Add_Click({ & $mergeQuerySuggestions })

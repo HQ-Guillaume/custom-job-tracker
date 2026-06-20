@@ -134,6 +134,27 @@ function Add-JobCrawlerProfileUniqueString {
     $List.Add($text) | Out-Null
 }
 
+function Merge-JobCrawlerProfileLineArrays {
+    param(
+        [AllowNull()]$Primary,
+        [AllowNull()]$Secondary,
+        [int]$MaxItems = 0
+    )
+
+    $primaryLines = @(ConvertTo-JobCrawlerProfileLineArray $Primary)
+    $secondaryLines = @(ConvertTo-JobCrawlerProfileLineArray $Secondary)
+    $mergedLines = New-Object System.Collections.Generic.List[string]
+    foreach ($line in @($primaryLines + $secondaryLines)) {
+        Add-JobCrawlerProfileUniqueString -List $mergedLines -Value $line
+    }
+
+    if ($MaxItems -gt 0) {
+        return @($mergedLines.ToArray() | Select-Object -First $MaxItems)
+    }
+
+    return @($mergedLines.ToArray())
+}
+
 function Get-JobCrawlerProfileRoleVariants {
     param([AllowNull()][string]$Title)
 
@@ -456,11 +477,7 @@ function New-JobCrawlerProfileFromBuilder {
         $queries = @($suggestedQueries)
     }
     elseif ($queries.Count -lt 4) {
-        $expandedQueries = New-Object System.Collections.Generic.List[string]
-        foreach ($query in @($queries + $suggestedQueries)) {
-            Add-JobCrawlerProfileUniqueString -List $expandedQueries -Value $query
-        }
-        $queries = @($expandedQueries.ToArray() | Select-Object -First 24)
+        $queries = @(Merge-JobCrawlerProfileLineArrays -Primary $queries -Secondary $suggestedQueries -MaxItems 24)
     }
 
     $compactProfile = [ordered]@{
