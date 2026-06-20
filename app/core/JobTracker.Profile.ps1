@@ -109,6 +109,258 @@ function New-JobCrawlerProfileSignal {
     }
 }
 
+function Add-JobCrawlerProfileUniqueString {
+    param(
+        $List,
+        [AllowNull()][string]$Value
+    )
+
+    if ($null -eq $List) {
+        return
+    }
+
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return
+    }
+
+    $key = ConvertTo-JobCrawlerPlainText $text
+    foreach ($existing in @($List.ToArray())) {
+        if ((ConvertTo-JobCrawlerPlainText $existing) -eq $key) {
+            return
+        }
+    }
+
+    $List.Add($text) | Out-Null
+}
+
+function Get-JobCrawlerProfileRoleVariants {
+    param([AllowNull()][string]$Title)
+
+    $variants = New-Object System.Collections.Generic.List[string]
+    $plain = ConvertTo-JobCrawlerPlainText $Title
+    if ([string]::IsNullOrWhiteSpace($plain)) {
+        return @()
+    }
+
+    $clean = [regex]::Replace($plain, "\([^)]*\)|\[[^\]]*\]", " ")
+    $clean = [regex]::Replace($clean, "\b(h|f|x|m|cdi|cdd|stage|alternance|apprentissage)\b", " ")
+    $clean = [regex]::Replace($clean, "\b(senior|junior|lead|head|principal)\b", " ")
+    $clean = [regex]::Replace($clean, "\s+", " ").Trim()
+    if ([string]::IsNullOrWhiteSpace($clean)) {
+        return @()
+    }
+
+    if ($clean -match "^(?<base>.+?)\s+(analyst|analyste)$") {
+        $base = [string]$Matches["base"]
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} analytics" -f $base)
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} analysis" -f $base)
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} insights" -f $base)
+    }
+    if ($clean -match "^(?<base>.+?)\s+(manager|lead)$") {
+        $base = [string]$Matches["base"]
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} management" -f $base)
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} lead" -f $base)
+    }
+    if ($clean -match "^(?<base>.+?)\s+(developer|developpeur|developpeuse|dev)$") {
+        $base = [string]$Matches["base"]
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} development" -f $base)
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} engineer" -f $base)
+    }
+    if ($clean -match "^(?<base>.+?)\s+(engineer|ingenieur|ingenieure)$") {
+        $base = [string]$Matches["base"]
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} developer" -f $base)
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} engineering" -f $base)
+    }
+    if ($clean -match "^(?<base>.+?)\s+(consultant|consultante)$") {
+        $base = [string]$Matches["base"]
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} consulting" -f $base)
+        Add-JobCrawlerProfileUniqueString -List $variants -Value ("{0} conseil" -f $base)
+    }
+    if ($clean -match "business\s+development") {
+        Add-JobCrawlerProfileUniqueString -List $variants -Value "business developer"
+        Add-JobCrawlerProfileUniqueString -List $variants -Value "sales development"
+        Add-JobCrawlerProfileUniqueString -List $variants -Value "bizdev"
+    }
+
+    return @($variants.ToArray())
+}
+
+function Get-JobCrawlerProfileNgrams {
+    param(
+        [AllowNull()][string]$Text,
+        [int]$MinTokens = 2,
+        [int]$MaxTokens = 3
+    )
+
+    $plain = ConvertTo-JobCrawlerPlainText $Text
+    if ([string]::IsNullOrWhiteSpace($plain)) {
+        return @()
+    }
+
+    $stop = @(
+        "a", "an", "and", "avec", "cdd", "cdi", "de", "des", "du", "en", "et", "f", "for", "h", "la", "le",
+        "les", "m", "of", "pour", "sur", "the", "x", "junior", "senior", "stage", "alternance", "apprentissage"
+    )
+    $tokens = New-Object System.Collections.Generic.List[string]
+    foreach ($match in [regex]::Matches($plain, "[a-z0-9]{2,}")) {
+        $token = [string]$match.Value
+        if ($token -notin $stop) {
+            $tokens.Add($token) | Out-Null
+        }
+    }
+
+    if ($tokens.Count -lt $MinTokens) {
+        return @()
+    }
+
+    $phrases = New-Object System.Collections.Generic.List[string]
+    for ($size = $MinTokens; $size -le $MaxTokens; $size++) {
+        if ($tokens.Count -lt $size) {
+            continue
+        }
+        $tokenArray = @($tokens.ToArray())
+        for ($i = 0; $i -le ($tokens.Count - $size); $i++) {
+            $phrase = (($tokenArray[$i..($i + $size - 1)]) -join " ")
+            if ($phrase.Length -ge 6) {
+                Add-JobCrawlerProfileUniqueString -List $phrases -Value $phrase
+            }
+        }
+    }
+
+    return @($phrases.ToArray())
+}
+
+function Get-JobCrawlerSearchQuerySuggestions {
+    param(
+        [AllowNull()][string]$Label = "",
+        [AllowNull()][string[]]$TargetTitles = @(),
+        [AllowNull()][string[]]$ImportantSkills = @(),
+        [int]$MaxQueries = 24
+    )
+
+    $queries = New-Object System.Collections.Generic.List[string]
+    $titles = @(ConvertTo-JobCrawlerProfileLineArray $TargetTitles)
+    if ($titles.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($Label)) {
+        $titles = @(([string]$Label).Trim())
+    }
+    $skills = @(ConvertTo-JobCrawlerProfileLineArray $ImportantSkills)
+
+    foreach ($title in ($titles | Select-Object -First 10)) {
+        Add-JobCrawlerProfileUniqueString -List $queries -Value $title
+    }
+    foreach ($title in ($titles | Select-Object -First 8)) {
+        foreach ($variant in @(Get-JobCrawlerProfileRoleVariants -Title $title)) {
+            Add-JobCrawlerProfileUniqueString -List $queries -Value $variant
+        }
+    }
+    foreach ($title in ($titles | Select-Object -First 6)) {
+        foreach ($phrase in @(Get-JobCrawlerProfileNgrams -Text $title -MinTokens 2 -MaxTokens 3)) {
+            Add-JobCrawlerProfileUniqueString -List $queries -Value $phrase
+        }
+    }
+    foreach ($title in ($titles | Select-Object -First 5)) {
+        foreach ($skill in ($skills | Select-Object -First 7)) {
+            Add-JobCrawlerProfileUniqueString -List $queries -Value ("{0} {1}" -f $title, $skill)
+        }
+    }
+    foreach ($skill in ($skills | Select-Object -First 8)) {
+        $plainSkill = ConvertTo-JobCrawlerPlainText $skill
+        if ($plainSkill.Length -ge 4 -and ($plainSkill -match "\s" -or $plainSkill -match "^[a-z0-9]{2,8}$")) {
+            Add-JobCrawlerProfileUniqueString -List $queries -Value $skill
+        }
+    }
+
+    return @($queries.ToArray() | Select-Object -First $MaxQueries)
+}
+
+function Get-JobCrawlerProfileQuality {
+    param(
+        [AllowNull()][string]$Label = "",
+        [AllowNull()][string[]]$TargetTitles = @(),
+        [AllowNull()][string[]]$SearchQueries = @(),
+        [AllowNull()][string[]]$ImportantSkills = @(),
+        [AllowNull()][string[]]$ExclusionKeywords = @(),
+        [AllowNull()][string[]]$TargetLocations = @(),
+        [AllowNull()][string[]]$ExcludedContracts = @()
+    )
+
+    $titles = @(ConvertTo-JobCrawlerProfileLineArray $TargetTitles)
+    $queries = @(ConvertTo-JobCrawlerProfileLineArray $SearchQueries)
+    $skills = @(ConvertTo-JobCrawlerProfileLineArray $ImportantSkills)
+    $exclusions = @(ConvertTo-JobCrawlerProfileLineArray $ExclusionKeywords)
+    $locations = @(ConvertTo-JobCrawlerProfileLineArray $TargetLocations)
+    $contracts = @(ConvertTo-JobCrawlerProfileLineArray $ExcludedContracts)
+    $suggestions = @(Get-JobCrawlerSearchQuerySuggestions -Label $Label -TargetTitles $titles -ImportantSkills $skills -MaxQueries 24)
+
+    $score = 0
+    if ($titles.Count -ge 5) { $score += 20 }
+    elseif ($titles.Count -ge 2) { $score += 16 }
+    elseif ($titles.Count -eq 1) { $score += 10 }
+
+    if ($queries.Count -ge 8) { $score += 30 }
+    elseif ($queries.Count -ge 4) { $score += 24 }
+    elseif ($queries.Count -ge 2) { $score += 14 }
+    elseif ($queries.Count -eq 1) { $score += 6 }
+
+    if ($skills.Count -ge 6) { $score += 20 }
+    elseif ($skills.Count -ge 3) { $score += 14 }
+    elseif ($skills.Count -ge 1) { $score += 8 }
+
+    if ($exclusions.Count -ge 3) { $score += 12 }
+    elseif ($exclusions.Count -ge 1) { $score += 6 }
+
+    if ($locations.Count -ge 1) { $score += 8 }
+    if ($contracts.Count -ge 3) { $score += 5 }
+    elseif ($contracts.Count -ge 1) { $score += 3 }
+
+    $titleKeys = @($titles | ForEach-Object { ConvertTo-JobCrawlerPlainText $_ })
+    $queryKeys = @($queries | ForEach-Object { ConvertTo-JobCrawlerPlainText $_ })
+    $exactTitleOnly = $false
+    if ($queries.Count -gt 0 -and $queries.Count -le [Math]::Max(1, $titles.Count)) {
+        $nonTitleQueries = @($queryKeys | Where-Object { $_ -notin $titleKeys })
+        $exactTitleOnly = ($nonTitleQueries.Count -eq 0)
+    }
+
+    $findings = New-Object System.Collections.Generic.List[string]
+    if ($titles.Count -lt 2) {
+        $findings.Add("Add related target titles so matching is not tied to one exact wording.") | Out-Null
+    }
+    if ($queries.Count -lt 4) {
+        $findings.Add("Use at least 4 search queries; one exact query can easily return 0 results.") | Out-Null
+    }
+    if ($exactTitleOnly) {
+        $findings.Add("Queries are too close to the exact titles; add broader wording and title + skill combinations.") | Out-Null
+    }
+    if ($skills.Count -lt 3) {
+        $findings.Add("Add important skills, tools, industries, or mission keywords to separate good jobs from broad noise.") | Out-Null
+    }
+    if ($exclusions.Count -eq 0) {
+        $findings.Add("Add excluded keywords for jobs you regularly reject.") | Out-Null
+    }
+    if ($locations.Count -eq 0) {
+        $findings.Add("Add target locations or country names to avoid irrelevant geographies.") | Out-Null
+    }
+    if ($contracts.Count -eq 0) {
+        $findings.Add("Select excluded contract types if some contracts are not useful for this search.") | Out-Null
+    }
+    if ($findings.Count -eq 0) {
+        $findings.Add("Profile has enough breadth for crawling and enough criteria for filtering.") | Out-Null
+    }
+
+    $level = "Risky"
+    if ($score -ge 85) { $level = "Strong" }
+    elseif ($score -ge 70) { $level = "Good" }
+    elseif ($score -ge 50) { $level = "Needs work" }
+
+    return [PSCustomObject]@{
+        Score            = [Math]::Min(100, $score)
+        Level            = $level
+        Findings         = @($findings.ToArray())
+        QuerySuggestions = @($suggestions)
+    }
+}
+
 function Write-JobCrawlerJsonConfig {
     param(
         [string]$Path,
@@ -198,18 +450,17 @@ function New-JobCrawlerProfileFromBuilder {
     $excludedLocations = @(ConvertTo-JobCrawlerProfileLineArray $ExcludedLocations)
     $excludedContractsClean = @(ConvertTo-JobCrawlerProfileLineArray $ExcludedContracts)
     $queries = @(ConvertTo-JobCrawlerProfileLineArray $SearchQueries)
+    $suggestedQueries = @(Get-JobCrawlerSearchQuerySuggestions -Label $profileLabel -TargetTitles $titles -ImportantSkills $skills -MaxQueries 24)
 
     if ($queries.Count -eq 0) {
-        $generatedQueries = New-Object System.Collections.Generic.List[string]
-        foreach ($title in ($titles | Select-Object -First 8)) {
-            $generatedQueries.Add($title) | Out-Null
+        $queries = @($suggestedQueries)
+    }
+    elseif ($queries.Count -lt 4) {
+        $expandedQueries = New-Object System.Collections.Generic.List[string]
+        foreach ($query in @($queries + $suggestedQueries)) {
+            Add-JobCrawlerProfileUniqueString -List $expandedQueries -Value $query
         }
-        foreach ($title in ($titles | Select-Object -First 4)) {
-            foreach ($skill in ($skills | Select-Object -First 8)) {
-                $generatedQueries.Add(("{0} {1}" -f $title, $skill)) | Out-Null
-            }
-        }
-        $queries = @($generatedQueries.ToArray() | Select-Object -Unique)
+        $queries = @($expandedQueries.ToArray() | Select-Object -First 24)
     }
 
     $compactProfile = [ordered]@{

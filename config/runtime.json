@@ -1,6 +1,11 @@
 ﻿{
     "defaults":  {
                      "days_back":  7,
+                     "allowed_days_back":  [
+                                               7,
+                                               14,
+                                               30
+                                           ],
                      "location":  "France",
                      "crawl_mode":  "Default",
                      "tracker_path":  "output\\profiles\\{profile_id}\\jobs_tracker.xlsx",

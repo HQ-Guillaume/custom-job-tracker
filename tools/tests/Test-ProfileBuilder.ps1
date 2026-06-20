@@ -73,11 +73,32 @@ try {
         -SearchQueries @("one query analyst") `
         -TargetLocations @("France") `
         -Compact
+    $singleQuerySavedQueries = @(Get-ConfigStringArray (Get-ConfigProperty -Object $singleQueryProfile["profile_builder"] -Name "search_queries" -DefaultValue @()))
+    Assert-ProfileBuilder -Condition ($singleQuerySavedQueries.Count -gt 1) -Message "Expected a one-query profile to be expanded with safer query suggestions."
     $singleQueryPath = Save-JobCrawlerLocalProfile -ConfigDirectory $tempConfig -Profile $singleQueryProfile
     Assert-ProfileBuilder -Condition (Test-Path -LiteralPath $singleQueryPath) -Message "Expected one-query local profile file to be saved."
     $singleQueryConfig = Get-JobCrawlerConfig -ConfigDirectory $tempConfig -ProfileId "one_query_analyst"
     $singleQueryValidation = Test-JobCrawlerConfig -Config $singleQueryConfig
     Assert-ProfileBuilder -Condition $singleQueryValidation.IsValid -Message "Expected one-query profile validation not to fail on scalar Count behavior."
+    Assert-ProfileBuilder -Condition (@(Get-ConfigStringArray (Get-ConfigPathValue -Object $singleQueryConfig.Sources -Path "queries.linkedin" -DefaultValue @())).Count -gt 1) -Message "Expected expanded LinkedIn queries for one-query profiles."
+
+    $weakQuality = Get-JobCrawlerProfileQuality `
+        -Label "One Query Analyst" `
+        -TargetTitles @("One Query Analyst") `
+        -SearchQueries @("one query analyst") `
+        -TargetLocations @("France")
+    Assert-ProfileBuilder -Condition ($weakQuality.Score -lt 70) -Message "Expected sparse profiles to receive a low quality score."
+    Assert-ProfileBuilder -Condition (@($weakQuality.QuerySuggestions).Count -gt 1) -Message "Expected sparse profile quality result to include query suggestions."
+
+    $strongQuality = Get-JobCrawlerProfileQuality `
+        -Label "CRM Analyst" `
+        -TargetTitles @("CRM analyst", "Lifecycle analyst", "Marketing automation analyst") `
+        -SearchQueries @("crm analyst", "lifecycle analytics", "crm analyst braze", "marketing automation hubspot", "customer analytics") `
+        -ImportantSkills @("Braze", "HubSpot", "SQL", "dashboarding", "segmentation", "campaign analytics") `
+        -ExclusionKeywords @("backend", "data engineer", "internship") `
+        -TargetLocations @("France") `
+        -ExcludedContracts @("CDD", "Internship", "Freelance")
+    Assert-ProfileBuilder -Condition ($strongQuality.Score -ge 70) -Message "Expected richer profiles to receive a good quality score."
 
     $removedProfilePath = Remove-JobCrawlerLocalProfile -ConfigDirectory $tempConfig -ProfileId "one_query_analyst"
     Assert-ProfileBuilder -Condition (-not (Test-Path -LiteralPath $removedProfilePath)) -Message "Expected local profile deletion to remove the profile file."

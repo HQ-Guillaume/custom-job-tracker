@@ -175,6 +175,7 @@ $script:SourceListView = $null
 $script:SourceCheckboxes = @()
 $script:IsRefreshingSourceList = $false
 $script:ModeComboBox = $null
+$script:DaysBackComboBox = $null
 $script:ProfileComboBox = $null
 $script:ProfileOptions = @()
 $script:ProfileActionButtons = @()
@@ -327,6 +328,9 @@ function Set-LauncherRunningState {
     $script:RunButton.Enabled = -not $IsRunning
     $script:StopButton.Enabled = $IsRunning
     $script:ModeComboBox.Enabled = -not $IsRunning
+    if ($null -ne $script:DaysBackComboBox) {
+        $script:DaysBackComboBox.Enabled = -not $IsRunning
+    }
     if ($null -ne $script:ProfileComboBox) {
         $script:ProfileComboBox.Enabled = -not $IsRunning
     }
@@ -947,6 +951,24 @@ function Refresh-ReadinessChecklist {
         }
         elseif ($validation.IsValid) {
             Add-ReadinessItem -Area "Config" -Status "Ready" -Detail ("Profile: {0}" -f $script:CrawlerConfig.Profile.Label)
+            $builder = Get-ConfigProperty -Object $script:CrawlerConfig.Profile -Name "profile_builder" -DefaultValue $null
+            if ($null -ne $builder) {
+                $quality = Get-JobCrawlerProfileQuality `
+                    -Label ([string]$script:CrawlerConfig.Profile.Label) `
+                    -TargetTitles (Get-ConfigStringArray (Get-ConfigProperty -Object $builder -Name "target_titles" -DefaultValue @())) `
+                    -SearchQueries (Get-ConfigStringArray (Get-ConfigProperty -Object $builder -Name "search_queries" -DefaultValue @())) `
+                    -ImportantSkills (Get-ConfigStringArray (Get-ConfigProperty -Object $builder -Name "important_skills" -DefaultValue @())) `
+                    -ExclusionKeywords (Get-ConfigStringArray (Get-ConfigProperty -Object $builder -Name "exclusion_keywords" -DefaultValue @())) `
+                    -TargetLocations (Get-ConfigStringArray (Get-ConfigProperty -Object $builder -Name "target_locations" -DefaultValue @())) `
+                    -ExcludedContracts (Get-ConfigStringArray (Get-ConfigProperty -Object $builder -Name "excluded_contracts" -DefaultValue @()))
+                $qualityLevel = $(if ($quality.Score -ge 70) { "ok" } elseif ($quality.Score -ge 50) { "warning" } else { "error" })
+                $qualityDetail = ("{0}/100 - {1}" -f $quality.Score, $quality.Level)
+                $firstFinding = @($quality.Findings | Select-Object -First 1)
+                if ($firstFinding.Count -gt 0) {
+                    $qualityDetail = "{0}. {1}" -f $qualityDetail, $firstFinding[0]
+                }
+                Add-ReadinessItem -Area "Profile quality" -Status $quality.Level -Detail $qualityDetail -Level $qualityLevel
+            }
         }
         else {
             Add-ReadinessItem -Area "Config" -Status "Review" -Detail (($validation.Issues) -join "; ") -Level "error"
@@ -1165,6 +1187,8 @@ function Start-CrawlerFromGui {
     $crawlerArguments = New-Object System.Collections.Generic.List[string]
     [void]$crawlerArguments.Add("-Profile")
     [void]$crawlerArguments.Add((Get-SelectedProfileId))
+    [void]$crawlerArguments.Add("-DaysBack")
+    [void]$crawlerArguments.Add(([string](Get-SelectedDaysBack)))
     [void]$crawlerArguments.Add("-CrawlMode")
     [void]$crawlerArguments.Add(([string]$script:ModeComboBox.SelectedItem))
 
@@ -1213,6 +1237,7 @@ function Start-CrawlerFromGui {
     New-LauncherRunLock -RunId $script:LauncherRunId -LogPath $runLogPath
 
     Add-LogLine ("Starting crawl in {0} mode." -f $script:ModeComboBox.SelectedItem)
+    Add-LogLine ("Published window: last {0} days." -f (Get-SelectedDaysBack))
     Add-LogLine ("Profile: {0} ({1})" -f $script:CrawlerConfig.Profile.Label, $script:CrawlerConfig.Profile.Id)
     Add-LogLine ("Output: {0} - {1}" -f $writerPlan.Status, $writerPlan.Detail)
     Add-LogLine ("Project: {0}" -f $script:ProjectRoot)
@@ -1464,9 +1489,9 @@ $mainLayout.Controls.Add($runGroup, 0, 1)
 $runTable = New-Object System.Windows.Forms.TableLayoutPanel
 $runTable.Dock = [System.Windows.Forms.DockStyle]::Fill
 $runTable.Padding = New-Object System.Windows.Forms.Padding(10, 8, 10, 10)
-$runTable.ColumnCount = 4
+$runTable.ColumnCount = 5
 $runTable.RowCount = 3
-foreach ($width in @(36, 16, 22, 26)) {
+foreach ($width in @(32, 14, 16, 16, 22)) {
     Add-ProfileTableColumn -Table $runTable -Width $width
 }
 Add-ProfileTableRow -Table $runTable -Height 58 -Absolute
@@ -1488,12 +1513,19 @@ $modeCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
 $modeCombo.Dock = [System.Windows.Forms.DockStyle]::Fill
 Add-ProfileEditorField -Table $runTable -Label "Crawl mode" -Control $modeCombo -Column 2 -Row 0
 
+$daysBackCombo = New-Object System.Windows.Forms.ComboBox
+$script:DaysBackComboBox = $daysBackCombo
+$daysBackCombo.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+$daysBackCombo.DisplayMember = "Label"
+$daysBackCombo.Dock = [System.Windows.Forms.DockStyle]::Fill
+Add-ProfileEditorField -Table $runTable -Label "Published since" -Control $daysBackCombo -Column 3 -Row 0
+
 $runButtons = New-Object System.Windows.Forms.FlowLayoutPanel
 $runButtons.Dock = [System.Windows.Forms.DockStyle]::Fill
 $runButtons.FlowDirection = [System.Windows.Forms.FlowDirection]::LeftToRight
 $runButtons.WrapContents = $false
 $runButtons.Padding = New-Object System.Windows.Forms.Padding(8, 22, 8, 4)
-$runTable.Controls.Add($runButtons, 3, 0)
+$runTable.Controls.Add($runButtons, 4, 0)
 
 $script:RunButton = New-Object System.Windows.Forms.Button
 $script:RunButton.Text = "Run crawl"
@@ -1560,7 +1592,7 @@ $optionsPanel.FlowDirection = [System.Windows.Forms.FlowDirection]::LeftToRight
 $optionsPanel.WrapContents = $false
 $optionsPanel.Padding = New-Object System.Windows.Forms.Padding(8, 5, 8, 4)
 $runTable.Controls.Add($optionsPanel, 2, 1)
-$runTable.SetColumnSpan($optionsPanel, 2)
+$runTable.SetColumnSpan($optionsPanel, 3)
 
 $script:DryRunCheckBox = New-Object System.Windows.Forms.CheckBox
 $script:DryRunCheckBox.Text = "Dry run"
@@ -1583,7 +1615,7 @@ $utilityButtons.FlowDirection = [System.Windows.Forms.FlowDirection]::LeftToRigh
 $utilityButtons.WrapContents = $false
 $utilityButtons.Padding = New-Object System.Windows.Forms.Padding(8, 4, 8, 4)
 $runTable.Controls.Add($utilityButtons, 0, 2)
-$runTable.SetColumnSpan($utilityButtons, 4)
+$runTable.SetColumnSpan($utilityButtons, 5)
 
 $validateButton = New-Object System.Windows.Forms.Button
 $validateButton.Text = "Validate"
@@ -1802,6 +1834,7 @@ $form.Add_Shown({
 
 Refresh-ProfileComboBox
 Refresh-ModeComboBox
+Refresh-DaysBackComboBox
 Refresh-SourceCheckboxes
 Refresh-CredentialList
 Add-LogLine "Launcher ready."

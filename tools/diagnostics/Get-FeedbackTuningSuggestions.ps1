@@ -16,6 +16,7 @@ $coreRoot = Join-Path $projectRoot "app\core"
 . (Join-Path $coreRoot "JobTracker.Config.ps1")
 . (Join-Path $coreRoot "JobTracker.Runtime.ps1")
 . (Join-Path $coreRoot "JobTracker.Scoring.ps1")
+. (Join-Path $coreRoot "JobTracker.Deduplication.ps1")
 . (Join-Path $coreRoot "JobTracker.Excel.ps1")
 
 $configPath = Resolve-JobCrawlerPath -BasePath $projectRoot -Path $ConfigDirectory
@@ -25,6 +26,8 @@ $script:JobCrawlerSourcesConfig = $script:JobCrawlerConfig.Sources
 $script:JobCrawlerMatchingRules = $script:JobCrawlerConfig.MatchingRules
 $script:JobCrawlerWorkbookConfig = $script:JobCrawlerConfig.Workbook
 $script:JobCrawlerPreferences = Get-JobCrawlerPreferences
+$MasterColumns = Get-JobTrackerMasterColumns
+$ColumnLabels = Get-JobTrackerColumnLabels
 
 if ([string]::IsNullOrWhiteSpace($TrackerPath)) {
     $TrackerPath = Get-JobCrawlerTrackerPath -ProjectRoot $projectRoot -Config $script:JobCrawlerConfig

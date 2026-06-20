@@ -27,7 +27,7 @@ The crawler creates and updates the workbook for the active profile. The `output
 
 It keeps:
 
-- matching jobs whose `Published` date is within the last 7 days
+- matching jobs whose `Published` date is within the selected crawl window; the default is 7 days, and the GUI offers 7, 14, or 30 days
 - older jobs only when their `status` is application-related: `applied`, `interview`, `offer`, `rejected`, or `withdrawn`
 
 CDD, apprenticeship, internship, and freelance jobs are excluded from new crawl results.
@@ -112,7 +112,7 @@ Fallback if Windows blocks `.vbs` files: double-click the command launcher:
 Run-CustomJobTracker-GUI.cmd
 ```
 
-The GUI lets you choose a profile, create/edit/duplicate profiles without editing JSON, choose Fast/Default/Deep mode, enable or disable sources, see live progress logs, open the tracker, clean old managed cache/log files, force a fresh fetch when needed, and check whether credentials are configured.
+The GUI lets you choose a profile, create/edit/duplicate profiles without editing JSON, choose Fast/Default/Deep mode, choose the published-date window, enable or disable sources, see live progress logs, open the tracker, clean old managed cache/log files, force a fresh fetch when needed, and check whether credentials are configured.
 
 Command-line fallback: double-click:
 
@@ -159,6 +159,12 @@ To run a specific profile from the command line:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\app\cli\Find-AnalyticsJobs.ps1 -Profile your_profile_id -CrawlMode Default
+```
+
+To widen the published-date window from the command line:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\app\cli\Find-AnalyticsJobs.ps1 -Profile your_profile_id -CrawlMode Default -DaysBack 14
 ```
 
 The GUI writes custom profiles to ignored local files under `config\local\profiles\`.
@@ -283,7 +289,7 @@ config\local.runtime.json
 
 Both locations are ignored by Git. They are personal local settings and are not included in public releases.
 
-Profile form fields are intentionally plain text. Put one title, skill, keyword, location, or query per line; the crawler saves a compact `profile_builder` file and generates matching rules, source queries, and fit preferences at load time.
+Profile form fields are intentionally plain text. Put one title, skill, keyword, location, or query per line; the crawler saves a compact `profile_builder` file and generates matching rules, source queries, and fit preferences at load time. The profile editor includes a quality score and an `Improve queries` action to expand overly narrow search queries from the titles and skills you entered.
 
 Advanced profiles can override source query pools explicitly under `sources.queries`. The crawler first looks for the source-specific list, then falls back to `api` when a source list is empty:
 
@@ -376,7 +382,7 @@ apply final invariant validation
 export workbook
 ```
 
-The pipeline gate owns hard rules such as published-date retention, excluded contracts, and invalid WTTJ locations. Merge and export call the same gate, so a late detail fetch or an existing tracker row cannot reintroduce a non-application CDD/freelance/internship/apprenticeship job or an old non-application job. Application-history statuses are intentionally preserved outside the 7-day window.
+The pipeline gate owns hard rules such as published-date retention, excluded contracts, and invalid WTTJ locations. Merge and export call the same gate, so a late detail fetch or an existing tracker row cannot reintroduce a non-application CDD/freelance/internship/apprenticeship job or an old non-application job. Application-history statuses are intentionally preserved outside the selected published-date window.
 
 ## Deduplication
 
@@ -454,7 +460,7 @@ Optional scope override:
 [Environment]::SetEnvironmentVariable("FRANCE_TRAVAIL_SCOPE", "api_offresdemploiv2 o2dsoffre", "User")
 ```
 
-The crawler searches the active profile query pool, asks the API for jobs published in the last 7 days, then maps France Travail fields into the same tracker columns: title, company, city/region, contract, URL, published date, match score, and source. If France Travail only returns a board/origin name instead of a real employer, that generic origin is not used as a company dedupe key.
+The crawler searches the active profile query pool, asks the API for jobs published in the selected crawl window, then maps France Travail fields into the same tracker columns: title, company, city/region, contract, URL, published date, match score, and source. If France Travail only returns a board/origin name instead of a real employer, that generic origin is not used as a company dedupe key.
 
 ## Adzuna
 
@@ -466,13 +472,13 @@ Adzuna is supported through the official jobs API. It is disabled by default in 
 powershell -ExecutionPolicy Bypass -File .\app\cli\Find-AnalyticsJobs.ps1 -EnableSource adzuna
 ```
 
-Adzuna has tighter public API limits, so the crawler uses a small default page count and pauses between calls. It uses `max_days_old` to keep the same 7-day crawl window.
+Adzuna has tighter public API limits, so the crawler uses a small default page count and pauses between calls. It uses `max_days_old` to keep the selected crawl window.
 
 ## APEC
 
 APEC is crawled through its public job-search JSON endpoint. It is enabled by default and does not need credentials.
 
-APEC is relatively fast because the search response already contains the title, company, city/region, contract type, published date, and a description snippet. The crawler uses relevance-sorted search results, applies the same 7-day `Published` filter afterwards, reads only a small number of result pages by default, and does not open every APEC detail page.
+APEC is relatively fast because the search response already contains the title, company, city/region, contract type, published date, and a description snippet. The crawler uses relevance-sorted search results, applies the same selected `Published` filter afterwards, reads only a small number of result pages by default, and does not open every APEC detail page.
 
 ## HelloWork
 

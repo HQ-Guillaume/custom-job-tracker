@@ -50,6 +50,94 @@ function Refresh-ModeComboBox {
     }
 }
 
+function Get-GuiDaysBackOptions {
+    $rawValues = @(Get-ConfigPathValue -Object $script:CrawlerConfig.Runtime -Path "defaults.allowed_days_back" -DefaultValue @(7, 14, 30))
+    $values = New-Object System.Collections.Generic.List[int]
+    foreach ($rawValue in $rawValues) {
+        try {
+            $value = [int]$rawValue
+        }
+        catch {
+            continue
+        }
+        if ($value -lt 1 -or $value -gt 365 -or $values.Contains($value)) {
+            continue
+        }
+        $values.Add($value) | Out-Null
+    }
+    if ($values.Count -eq 0) {
+        foreach ($fallback in @(7, 14, 30)) {
+            $values.Add([int]$fallback) | Out-Null
+        }
+    }
+
+    $options = New-Object System.Collections.Generic.List[object]
+    foreach ($value in @($values.ToArray() | Sort-Object)) {
+        $label = "{0} days" -f $value
+        if ($value -eq 14) {
+            $label = "14 days (2 weeks)"
+        }
+        elseif ($value -eq 30) {
+            $label = "30 days (1 month)"
+        }
+        [void]$options.Add([PSCustomObject]@{ Label = $label; Value = $value })
+    }
+
+    return @($options.ToArray())
+}
+
+function Get-SelectedDaysBack {
+    $defaultDays = [int](Get-ConfigPathValue -Object $script:CrawlerConfig.Runtime -Path "defaults.days_back" -DefaultValue 7)
+    if ($null -ne $script:DaysBackComboBox -and $null -ne $script:DaysBackComboBox.SelectedItem) {
+        $selectedValue = Get-ConfigProperty -Object $script:DaysBackComboBox.SelectedItem -Name "Value" -DefaultValue $defaultDays
+        try {
+            return [int]$selectedValue
+        }
+        catch {
+            return $defaultDays
+        }
+    }
+
+    return $defaultDays
+}
+
+function Refresh-DaysBackComboBox {
+    if ($null -eq $script:DaysBackComboBox) {
+        return
+    }
+
+    $previousDays = Get-SelectedDaysBack
+    $defaultDays = [int](Get-ConfigPathValue -Object $script:CrawlerConfig.Runtime -Path "defaults.days_back" -DefaultValue 7)
+    $targetDays = $(if ($previousDays -gt 0) { $previousDays } else { $defaultDays })
+
+    $script:DaysBackComboBox.Items.Clear()
+    foreach ($option in @(Get-GuiDaysBackOptions)) {
+        [void]$script:DaysBackComboBox.Items.Add($option)
+    }
+    if ($script:DaysBackComboBox.Items.Count -eq 0) {
+        return
+    }
+
+    $selectedIndex = -1
+    for ($i = 0; $i -lt $script:DaysBackComboBox.Items.Count; $i++) {
+        $value = [int](Get-ConfigProperty -Object $script:DaysBackComboBox.Items[$i] -Name "Value" -DefaultValue 0)
+        if ($value -eq $targetDays) {
+            $selectedIndex = $i
+            break
+        }
+    }
+    if ($selectedIndex -lt 0) {
+        for ($i = 0; $i -lt $script:DaysBackComboBox.Items.Count; $i++) {
+            $value = [int](Get-ConfigProperty -Object $script:DaysBackComboBox.Items[$i] -Name "Value" -DefaultValue 0)
+            if ($value -eq $defaultDays) {
+                $selectedIndex = $i
+                break
+            }
+        }
+    }
+    $script:DaysBackComboBox.SelectedIndex = $(if ($selectedIndex -ge 0) { $selectedIndex } else { 0 })
+}
+
 function Get-GuiSourceCredentialSummary {
     param($Definition)
 
@@ -218,6 +306,7 @@ function Select-ProfileFromGui {
         Set-LauncherCrawlerConfig -ProfileId $profileId
         Set-LauncherOutputPaths
         Refresh-ModeComboBox
+        Refresh-DaysBackComboBox
         Refresh-SourceCheckboxes
         Refresh-CredentialList
         Set-LauncherStatus ("Profile selected: {0}" -f $script:CrawlerConfig.Profile.Label)
@@ -290,6 +379,7 @@ function Remove-SelectedProfileFromGui {
         Set-LauncherOutputPaths
         Refresh-ProfileComboBox -SelectedProfileId $nextProfileId
         Refresh-ModeComboBox
+        Refresh-DaysBackComboBox
         Refresh-SourceCheckboxes
         Refresh-CredentialList
         Add-LogLine ("Profile deleted: {0}" -f $deletedPath)
@@ -484,12 +574,15 @@ function Show-ProfileEditorDialog {
     $identityTab.Text = "Identity"
     $searchTab = New-Object System.Windows.Forms.TabPage
     $searchTab.Text = "Search intent"
+    $qualityTab = New-Object System.Windows.Forms.TabPage
+    $qualityTab.Text = "Quality"
     $filtersTab = New-Object System.Windows.Forms.TabPage
     $filtersTab.Text = "Filters"
     $preferencesTab = New-Object System.Windows.Forms.TabPage
     $preferencesTab.Text = "Preferences"
     [void]$tabs.TabPages.Add($identityTab)
     [void]$tabs.TabPages.Add($searchTab)
+    [void]$tabs.TabPages.Add($qualityTab)
     [void]$tabs.TabPages.Add($filtersTab)
     [void]$tabs.TabPages.Add($preferencesTab)
 
@@ -591,11 +684,143 @@ function Show-ProfileEditorDialog {
     $defaultCheckBox.Checked = ($null -ne $SourceProfileSummary -and [string]$SourceProfileSummary.Id -eq [string]$script:CrawlerConfig.Profile.Id -and -not $Duplicate)
     Add-ProfileEditorField -Table $preferencesTable -Label "Default profile" -Control $defaultCheckBox -Column 0 -Row 1
 
+    $qualityTable = New-Object System.Windows.Forms.TableLayoutPanel
+    $qualityTable.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $qualityTable.Padding = New-Object System.Windows.Forms.Padding(14)
+    $qualityTable.ColumnCount = 1
+    $qualityTable.RowCount = 4
+    Add-ProfileTableColumn -Table $qualityTable -Width 100
+    Add-ProfileTableRow -Table $qualityTable -Height 48 -Absolute
+    Add-ProfileTableRow -Table $qualityTable -Height 44 -Absolute
+    Add-ProfileTableRow -Table $qualityTable -Height 100
+    Add-ProfileTableRow -Table $qualityTable -Height 46 -Absolute
+    $qualityTab.Controls.Add($qualityTable)
+
+    $qualityScoreLabel = New-Object System.Windows.Forms.Label
+    $qualityScoreLabel.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $qualityScoreLabel.Font = New-Object System.Drawing.Font("Segoe UI Semibold", 14)
+    $qualityScoreLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $qualityTable.Controls.Add($qualityScoreLabel, 0, 0)
+
+    $qualityHintLabel = New-Object System.Windows.Forms.Label
+    $qualityHintLabel.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $qualityHintLabel.ForeColor = [System.Drawing.Color]::FromArgb(77, 91, 114)
+    $qualityHintLabel.Text = "Quality checks whether the profile has enough search breadth before filtering. Search queries bring jobs in; titles, skills, exclusions, locations, and contracts decide what stays."
+    $qualityHintLabel.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
+    $qualityTable.Controls.Add($qualityHintLabel, 0, 1)
+
+    $qualityDetailsBox = New-ProfileEditorTextBox -Multiline
+    $qualityDetailsBox.ReadOnly = $true
+    $qualityDetailsBox.WordWrap = $true
+    $qualityTable.Controls.Add($qualityDetailsBox, 0, 2)
+
+    $qualityButtons = New-Object System.Windows.Forms.FlowLayoutPanel
+    $qualityButtons.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $qualityButtons.FlowDirection = [System.Windows.Forms.FlowDirection]::LeftToRight
+    $qualityButtons.WrapContents = $false
+    $qualityButtons.Padding = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+    $qualityTable.Controls.Add($qualityButtons, 0, 3)
+
+    $improveQueriesButton = New-Object System.Windows.Forms.Button
+    $improveQueriesButton.Text = "Improve queries"
+    $improveQueriesButton.Size = New-Object System.Drawing.Size(116, 30)
+    [void]$qualityButtons.Controls.Add($improveQueriesButton)
+
+    $refreshQualityButton = New-Object System.Windows.Forms.Button
+    $refreshQualityButton.Text = "Refresh score"
+    $refreshQualityButton.Size = New-Object System.Drawing.Size(112, 30)
+    [void]$qualityButtons.Controls.Add($refreshQualityButton)
+
+    $getExcludedContractsFromEditor = {
+        return @($contractBoxes | Where-Object { $_.Checked } | ForEach-Object { [string]$_.Text })
+    }
+    $getQualityFromEditor = {
+        return Get-JobCrawlerProfileQuality `
+            -Label $nameBox.Text `
+            -TargetTitles (Get-TextBoxLines $titlesBox) `
+            -SearchQueries (Get-TextBoxLines $queriesBox) `
+            -ImportantSkills (Get-TextBoxLines $skillsBox) `
+            -ExclusionKeywords (Get-TextBoxLines $exclusionsBox) `
+            -TargetLocations (Get-TextBoxLines $targetLocationsBox) `
+            -ExcludedContracts (& $getExcludedContractsFromEditor)
+    }
+    $updateQualityPreview = {
+        try {
+            $quality = & $getQualityFromEditor
+            $qualityScoreLabel.Text = ("Profile quality: {0}/100 - {1}" -f $quality.Score, $quality.Level)
+            if ($quality.Score -ge 85) {
+                $qualityScoreLabel.ForeColor = [System.Drawing.Color]::FromArgb(30, 104, 72)
+            }
+            elseif ($quality.Score -ge 70) {
+                $qualityScoreLabel.ForeColor = [System.Drawing.Color]::FromArgb(40, 88, 141)
+            }
+            elseif ($quality.Score -ge 50) {
+                $qualityScoreLabel.ForeColor = [System.Drawing.Color]::FromArgb(132, 86, 18)
+            }
+            else {
+                $qualityScoreLabel.ForeColor = [System.Drawing.Color]::FromArgb(154, 69, 59)
+            }
+
+            $detailLines = New-Object System.Collections.Generic.List[string]
+            foreach ($finding in @($quality.Findings)) {
+                $detailLines.Add(("- {0}" -f $finding)) | Out-Null
+            }
+            $suggestions = @($quality.QuerySuggestions | Select-Object -First 12)
+            if ($suggestions.Count -gt 0) {
+                $detailLines.Add("") | Out-Null
+                $detailLines.Add("Suggested search queries:") | Out-Null
+                foreach ($suggestion in $suggestions) {
+                    $detailLines.Add(("- {0}" -f $suggestion)) | Out-Null
+                }
+            }
+            $qualityDetailsBox.Text = ($detailLines.ToArray() -join [Environment]::NewLine)
+        }
+        catch {
+            $qualityScoreLabel.Text = "Profile quality: unavailable"
+            $qualityScoreLabel.ForeColor = [System.Drawing.Color]::FromArgb(154, 69, 59)
+            $qualityDetailsBox.Text = $_.Exception.Message
+        }
+    }
+    $mergeQuerySuggestions = {
+        $quality = & $getQualityFromEditor
+        $mergedQueries = New-Object System.Collections.Generic.List[string]
+        foreach ($query in @((Get-TextBoxLines $queriesBox) + @($quality.QuerySuggestions))) {
+            Add-JobCrawlerProfileUniqueString -List $mergedQueries -Value $query
+        }
+        Set-TextBoxLines -TextBox $queriesBox -Lines @($mergedQueries.ToArray())
+        & $updateQualityPreview
+    }
+    $improveQueriesButton.Add_Click({ & $mergeQuerySuggestions })
+    $refreshQualityButton.Add_Click({ & $updateQualityPreview })
+    foreach ($profileEditorControl in @($nameBox, $titlesBox, $queriesBox, $skillsBox, $exclusionsBox, $targetLocationsBox)) {
+        $profileEditorControl.Add_TextChanged({ & $updateQualityPreview })
+    }
+    foreach ($contractBox in @($contractBoxes)) {
+        $contractBox.Add_CheckedChanged({ & $updateQualityPreview })
+    }
+    $qualityTab.Add_Enter({ & $updateQualityPreview })
+
     $saveButton = New-Object System.Windows.Forms.Button
     $saveButton.Text = "Save"
     $saveButton.Size = New-Object System.Drawing.Size(88, 30)
     $saveButton.Add_Click({
         try {
+            if (@(Get-TextBoxLines $queriesBox).Count -lt 4) {
+                & $mergeQuerySuggestions
+            }
+            $quality = & $getQualityFromEditor
+            if ($quality.Score -lt 45) {
+                $answer = [System.Windows.Forms.MessageBox]::Show(
+                    ("This profile quality is {0}/100 ({1}). It may return 0 results or noisy results.`n`nSave anyway?" -f $quality.Score, $quality.Level),
+                    "Profile quality",
+                    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                    [System.Windows.Forms.MessageBoxIcon]::Warning
+                )
+                if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) {
+                    return
+                }
+            }
+
             $contracts = @($contractBoxes | Where-Object { $_.Checked } | ForEach-Object { [string]$_.Text })
             $profile = New-JobCrawlerProfileFromBuilder `
                 -Label $nameBox.Text `
@@ -621,6 +846,7 @@ function Show-ProfileEditorDialog {
             Set-LauncherOutputPaths
             Refresh-ProfileComboBox -SelectedProfileId $profileId
             Refresh-ModeComboBox
+            Refresh-DaysBackComboBox
             Refresh-SourceCheckboxes
             Refresh-CredentialList
             Add-LogLine ("Profile saved: {0}" -f $path)
@@ -646,6 +872,7 @@ function Show-ProfileEditorDialog {
 
     $dialog.AcceptButton = $saveButton
     $dialog.CancelButton = $cancelButton
+    & $updateQualityPreview
     [void]$dialog.ShowDialog($script:MainForm)
 }
 
