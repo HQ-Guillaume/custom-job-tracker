@@ -1,5 +1,7 @@
 # Custom Job Tracker
 
+[![Latest release](https://img.shields.io/github/v/release/haiqigeng/=semver)](https://github.com/haiqigeng/custom-job-tracker/releases/latest) ![License](https://img.shields.io/github/license/haiqigeng/custom-job-tracker) ![Top language](https://img.shields.io/github/languages/top/haiqigeng/custom-job-tracker)
+
 Rolling crawler and lightweight application tracker for customizable job-search profiles.
 
 This repository is designed as a clean public release. Personal tracker data, credentials, local overrides, caches, backups, diagnostics, and generated workbooks stay outside Git.
